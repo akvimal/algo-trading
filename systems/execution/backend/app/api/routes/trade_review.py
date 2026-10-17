@@ -50,7 +50,8 @@ def suggestions(kind: Literal["position", "group"], trade_id: str, user: User = 
     mine = next((s for s in scores if s.facts.id == str(parsed) and not s.facts.auto_traded), None)
     if mine is None:
         return none
-    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context)}
+    verdict = tr.override_verdict(mine.facts.entry_context, mine.facts.stop0, mine.facts.target0, mine.planned_rr, mine.exit_r, mine.facts.pnl, cfg.min_rr)
+    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context, verdict)}
 
 
 @router.get("/trade-review/summary/{segment}")
@@ -70,15 +71,32 @@ def summary(segment: str, scope: Literal["epoch", "all"] = "epoch", user: User =
 @router.get("/trade-review/sessions")
 def sessions(limit: int = 10, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The last `limit` trading sessions as two grids (app/domain/session_grid.py): the person's own trades judged on Study / Plan / Trade from their reviews,
-    and the bots' trades judged on result, wins and a clean run. Every market together; a session with no closed trade is skipped."""
+    and the bots' trades judged on result, wins and a clean run. Every market together; a session with no closed trade is skipped. `overrides` counts, over the
+    sessions shown, how often the person overrode the system's read of the market and how often that paid off."""
     limit = max(1, min(limit, 30))
     since = date.today() - timedelta(days=75)  # ten sessions fit comfortably; older history is not read
-    facts = [f for seg in ("NSE", "MCX", "CRYPTO") for f in load_trade_facts(db, user.id, seg, since)]
+    facts: list = []
+    verdicts: dict = {}
+    for seg in ("NSE", "MCX", "CRYPTO"):
+        seg_facts = load_trade_facts(db, user.id, seg, since)
+        facts += seg_facts
+        if not any((f.entry_context or {}).get("overridden") for f in seg_facts):
+            continue  # nothing to judge in this market
+        account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book="intraday").first()
+        cfg = dv2.DisciplineConfig.from_settings(
+            min_rr=float(account.min_reward_risk_ratio) if account is not None else 2.0,
+            daily_loss_limit=float(account.max_daily_loss) if account is not None and account.max_daily_loss is not None else None,
+        )
+        for s in dv2.evaluate_all(seg_facts, cfg):
+            if not s.facts.auto_traded:
+                verdicts[s.facts.id] = tr.override_verdict(s.facts.entry_context, s.facts.stop0, s.facts.target0, s.planned_rr, s.exit_r, s.facts.pnl, cfg.min_rr)
     D = db_models.SpreadBotDecision
     failed: dict = {}
     for d in db.query(D).filter(D.user_id == user.id, D.outcome == "failed", D.decided_at >= datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)).all():
         failed[day_key(d.decided_at)] = failed.get(day_key(d.decided_at), 0) + 1
+    manual = sg.manual_sessions([f for f in facts if not f.auto_traded], limit, verdicts)
     return {
-        "manual": sg.manual_sessions([f for f in facts if not f.auto_traded], limit),
+        "manual": manual,
         "bot": sg.bot_sessions([f for f in facts if f.auto_traded], failed, limit),
+        "overrides": {"total": sum(m["overrides"] for m in manual), "paid_off": sum(m["paid_off"] for m in manual)},
     }

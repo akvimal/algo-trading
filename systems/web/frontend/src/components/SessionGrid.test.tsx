@@ -37,6 +37,17 @@ describe("ManualGrid", () => {
     expect(screen.getByRole("link", { name: /1 not reviewed/ })).toBeInTheDocument();
   });
 
+  it("shows the override record, and says in the Study cell how many overrides paid off", () => {
+    render(<MemoryRouter><ManualGrid sessions={[session("2026-10-03", { overrides: 2, paid_off: 1 })]} overrides={{ total: 2, paid_off: 1 }} /></MemoryRouter>);
+    expect(screen.getByTestId("override-record")).toHaveTextContent("Your overrides: 1 of 2 paid off");
+    expect(screen.getByLabelText(/Study, 2026-10-03/)).toHaveAttribute("title", "3 of 3 reviewed trades were analysed before entry (1 override paid off)");
+  });
+
+  it("shows no override record when there were no overrides", () => {
+    render(<MemoryRouter><ManualGrid sessions={[session("2026-10-03")]} overrides={{ total: 0, paid_off: 0 }} /></MemoryRouter>);
+    expect(screen.queryByTestId("override-record")).not.toBeInTheDocument();
+  });
+
   it("shows no review chip when everything is reviewed", () => {
     renderManual([session("2026-10-03")]);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

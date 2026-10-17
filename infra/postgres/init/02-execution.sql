@@ -1242,3 +1242,6 @@ CREATE TABLE IF NOT EXISTS execution.inbox_items (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_items_dedupe ON execution.inbox_items (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS inbox_items_user_created ON execution.inbox_items (user_id, created_at DESC);
+
+-- The order-time read a waiting order carries until it fills (migration 067).
+ALTER TABLE execution.pending_orders ADD COLUMN IF NOT EXISTS entry_context JSONB;

@@ -104,11 +104,40 @@ def against_trend(action: str, context: Optional[dict]) -> Optional[bool]:
     return (regime == "trending_up") != (action == "BUY")
 
 
-def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional[dict]) -> dict:
-    """The tags the data supports for one trade, each with its level and why, and the root cause they imply. Study first, as in the chain."""
+OVERRIDE_MIN_R = 1.0  # an override only pays off when the trade won at least this many times the risk it took
+_RR_TOL = 0.01
+OVERRIDE_WHY = {
+    "paid_off": "You overrode the system's read, the plan held and the trade won at least 1R, so the override counts as a pass.",
+    "small_win": "You overrode the system's read and won, but by less than 1R: not counted as a pass, not counted against you.",
+    "lost": "You overrode the system's read and the trade lost: worth asking whether the read was right.",
+    "weak_plan": "You overrode the system's read without a complete plan (a stop and a target at order time, at your minimum reward-to-risk), so a win would not have cleared it.",
+}
+
+
+def override_verdict(entry_context: Optional[dict], stop0, target0, planned_rr: Optional[float], exit_r: Optional[float], pnl: Optional[float], min_rr: float) -> Optional[str]:
+    """What became of the person overriding the system's read of the market, or None when they did not.
+      paid_off  - the plan held (a stop and a target at order time, reward-to-risk at the minimum) and the trade won at least 1R
+      small_win - plan held, won, but under 1R
+      lost      - plan held, did not win
+      weak_plan - the plan was incomplete: a win never rescues that"""
+    if not entry_context or entry_context.get("overridden") is not True:
+        return None
+    if stop0 is None or target0 is None or planned_rr is None or planned_rr + _RR_TOL < min_rr:
+        return "weak_plan"
+    if (pnl or 0) > 0:
+        return "paid_off" if exit_r is not None and exit_r >= OVERRIDE_MIN_R else "small_win"
+    return "lost"
+
+
+def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional[dict], override: Optional[str] = None) -> dict:
+    """The tags the data supports for one trade, each with its level and why, and the root cause they imply. Study first, as in the chain.
+    `override` is override_verdict's answer: an override that paid off clears 'against the trend', one that was neither a clear win nor a plan
+    failure is left to the person, the others are suggested with the override as the reason."""
     found: dict[str, str] = {}
-    if against_trend(action, entry_context):
+    if against_trend(action, entry_context) and override not in ("paid_off", "small_win"):
         found["against_trend"] = "The market was trending the other way at entry" + (f" (ADX {entry_context['adx']:.0f})." if isinstance(entry_context.get("adx"), (int, float)) else ".")
+        if override in ("lost", "weak_plan"):
+            found["against_trend"] += " " + OVERRIDE_WHY[override]
     for m in discipline_mistakes:
         tag = FROM_DISCIPLINE.get(m)
         if tag and tag not in found:
@@ -118,6 +147,7 @@ def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional
         "tags": [{"tag": t, "level": TAG_LEVEL[t], "label": TAXONOMY[TAG_LEVEL[t]][t], "why": found[t]} for t in tags],
         "root_cause": root_cause_for(tags),
         "had_context": bool(entry_context),
+        "override": {"verdict": override, "why": OVERRIDE_WHY[override]} if override else None,
     }
 
 
@@ -130,6 +160,11 @@ def clean_context(raw) -> Optional[dict]:
         out["regime"] = raw["regime"]
     if raw.get("trend") in ("up", "down", "range"):
         out["trend"] = raw["trend"]
+    # The person's own read, when they pinned one: whether it differs from the system's clear read is what the review treats as an override.
+    if raw.get("person_read") in ("trending_up", "trending_down", "ranging", "transitional"):
+        out["person_read"] = raw["person_read"]
+    if raw.get("overridden") is True:
+        out["overridden"] = True
     adx = raw.get("adx")
     if isinstance(adx, (int, float)) and not isinstance(adx, bool) and 0 <= adx <= 100:
         out["adx"] = round(float(adx), 1)

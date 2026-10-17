@@ -69,3 +69,4 @@
 064-oi-alert-outcomes.sql|market_data.oi_alert_outcomes|
 065-trade-review-mistakes.sql|execution.positions|root_cause
 066-inbox.sql|execution.inbox_items|
+067-pending-entry-context.sql|execution.pending_orders|entry_context

@@ -511,7 +511,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             </div>
           </div>
           <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
-            {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
+            {raw.planState != null && read != null && raw.planState !== read ? "Your read. It differs from the system's: it counts as a pass if your plan holds and the trade wins at least 1R." : raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
           </div>
           {raw.planKind && (
             <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">

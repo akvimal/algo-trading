@@ -57,3 +57,19 @@ def test_the_bot_grid_judges_result_wins_and_a_clean_run():
     assert d3["pnl"] == 200 and d3["result"] == "good" and d3["wins"] == 1 and d3["wins_band"] == "mid" and d3["clean"] == "mid" and d3["no_stop"] == 1
     d4 = out["2026-10-04"]
     assert d4["result"] == "poor" and d4["wins_band"] == "poor" and d4["clean"] == "poor" and d4["failed"] == 2
+
+
+def test_an_override_that_paid_off_does_not_count_against_study_but_other_study_mistakes_still_do():
+    paid = trade(3, root_cause="study", tags=["against_trend"])
+    paid_but_impulsive = trade(3, pnl=250, root_cause="study", tags=["against_trend", "impulse"])
+    lost = trade(3, pnl=-100, root_cause="study", tags=["against_trend"])
+    verdicts = {paid.id: "paid_off", paid_but_impulsive.id: "paid_off", lost.id: "lost"}
+    day = sg.manual_sessions([paid, paid_but_impulsive, lost], verdicts=verdicts)[0]
+    assert (day["study"]["ok"], day["study"]["of"]) == (1, 3)  # only the first is cleared
+    assert day["overrides"] == 3 and day["paid_off"] == 2
+    assert sg.manual_sessions([paid], verdicts={})[0]["study"]["ok"] == 0  # without the override it counts
+
+
+def test_sessions_without_overrides_report_zero():
+    day = sg.manual_sessions([trade(3, root_cause="clean", tags=[])])[0]
+    assert day["overrides"] == 0 and day["paid_off"] == 0

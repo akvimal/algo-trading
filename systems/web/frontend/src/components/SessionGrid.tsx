@@ -52,7 +52,7 @@ const Swatch = ({ band, children }: { band: GridBand; children: ReactNode }) => 
   <span className="sgrid-key"><i className={`sgrid-cell ${band}`} /> {children}</span>
 );
 
-export function ManualGrid({ sessions }: { sessions: ManualSession[] }) {
+export function ManualGrid({ sessions, overrides }: { sessions: ManualSession[]; overrides?: { total: number; paid_off: number } | null }) {
   const cell = (k: "study" | "plan" | "trade", noun: string): Pick<Row, "band" | "title" | "hatched"> => ({
     band: (i) => sessions[i][k].band,
     title: (i) => {
@@ -60,7 +60,8 @@ export function ManualGrid({ sessions }: { sessions: ManualSession[] }) {
       const c = s[k];
       if (c.of === 0) return `${s.unreviewed} of ${s.trades} not reviewed yet: no verdict`;
       const base = `${c.ok} of ${c.of} reviewed trades ${noun}`;
-      return s.unreviewed > 0 ? `${base} (${s.unreviewed} not reviewed yet)` : base;
+      const extra = [s.unreviewed > 0 ? `${s.unreviewed} not reviewed yet` : "", k === "study" && (s.paid_off ?? 0) > 0 ? `${s.paid_off} override${s.paid_off === 1 ? "" : "s"} paid off` : ""].filter(Boolean).join(", ");
+      return extra ? `${base} (${extra})` : base;
     },
     hatched: (i) => sessions[i][k].of === 0,
   });
@@ -88,6 +89,11 @@ export function ManualGrid({ sessions }: { sessions: ManualSession[] }) {
           <Swatch band="mid">50 to 80%</Swatch>
           <Swatch band="poor">below 50%</Swatch>
           <span className="sgrid-key"><i className="sgrid-cell none hatched" /> not reviewed</span>
+          {overrides && overrides.total > 0 && (
+            <span className="sgrid-key" data-testid="override-record" title="Times you chose a different read of the market from the system's, and the trade held its plan and won at least 1R">
+              Your overrides: {overrides.paid_off} of {overrides.total} paid off
+            </span>
+          )}
         </>
       }
     />
@@ -133,7 +139,7 @@ export function useSessionGrids() {
 export function SessionGrids({ grids }: { grids: SessionGridsData }) {
   return (
     <>
-      {grids.manual.length > 0 && <ManualGrid sessions={grids.manual} />}
+      {grids.manual.length > 0 && <ManualGrid sessions={grids.manual} overrides={grids.overrides} />}
       {grids.bot.length > 0 && <BotGrid sessions={grids.bot} />}
     </>
   );

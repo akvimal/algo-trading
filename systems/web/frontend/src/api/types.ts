@@ -616,7 +616,9 @@ export type DisciplineTrade = {
 export type RootCause = "study" | "plan" | "execution" | "clean";
 export type SuggestedTag = { tag: string; level: Exclude<RootCause, "clean">; label: string; why: string };
 /** What the data supports for one closed trade (GET /trade-review/{kind}/{id}/suggestions). Never a verdict: the person confirms. */
-export type ReviewSuggestions = { available: boolean; tags: SuggestedTag[]; root_cause: RootCause | null; had_context: boolean };
+/** What became of overriding the system's read of the market: paid_off (plan held, won at least 1R), small_win, lost, or weak_plan (a win never rescues that). */
+export type OverrideVerdict = "paid_off" | "small_win" | "lost" | "weak_plan";
+export type ReviewSuggestions = { available: boolean; tags: SuggestedTag[]; root_cause: RootCause | null; had_context: boolean; override?: { verdict: OverrideVerdict; why: string } | null };
 export type CostBlock = { n: number; pnl: number; avg_loss: number | null };
 /** GET /trade-review/summary/{segment}: what the reviewed trades cost, by level and by tag. */
 export type MistakeSummary = {
@@ -763,8 +765,8 @@ export type ZoneScan = { snapshot_date: string | null; rows: ZoneScanRow[] };
 /** The home page's last-sessions grids (execution's GET /trade-review/sessions). A cell's band is good (above 80%), mid (50 to 80), poor (below 50) or none (nothing to judge). */
 export type GridBand = "good" | "mid" | "poor" | "none";
 export type GridCell = { ok: number; of: number; rate: number | null; band: GridBand };
-export type ManualSession = { date: string; trades: number; unreviewed: number; study: GridCell; plan: GridCell; trade: GridCell };
+export type ManualSession = { date: string; trades: number; unreviewed: number; study: GridCell; plan: GridCell; trade: GridCell; overrides?: number; paid_off?: number };
 export type BotSession = {
   date: string; trades: number; pnl: number; wins: number; win_rate: number; result: GridBand; wins_band: GridBand; clean: GridBand; no_stop: number; failed: number;
 };
-export type SessionGrids = { manual: ManualSession[]; bot: BotSession[] };
+export type SessionGrids = { manual: ManualSession[]; bot: BotSession[]; /** Over the sessions shown: how often the person overrode the system's read of the market, and how often it paid off. */ overrides?: { total: number; paid_off: number } };

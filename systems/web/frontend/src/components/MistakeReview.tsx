@@ -62,6 +62,12 @@ export function MistakeReview({ trade, onSaved }: { trade: Trade; onSaved: () =>
           </button>
         </div>
       )}
+      {suggestions.data?.override && (
+        <p className="faint" style={{ fontSize: 12, margin: "0 0 10px" }} data-testid="override-note">
+          <strong>{{ paid_off: "Override paid off. ", small_win: "Override won, under 1R. ", lost: "Override lost. ", weak_plan: "Override without a full plan. " }[suggestions.data.override.verdict]}</strong>
+          {suggestions.data.override.why}
+        </p>
+      )}
       {suggestions.data && suggestions.data.available && !suggestions.data.had_context && (
         <p className="faint" style={{ fontSize: 12, margin: "0 0 10px" }}>The trend at entry was not recorded for this trade, so “against the trend” is up to you.</p>
       )}

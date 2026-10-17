@@ -435,7 +435,20 @@ export type BuildMeta = {
 const INTRADAY_ENTRY = ["1min", "3min", "5min", "15min", "30min", "60min"];
 export const entryIntervalOf = (interval: string | null | undefined) => (interval && INTRADAY_ENTRY.includes(interval) ? { entry_interval: interval } : {});
 
-const contextOf = (meta: BuildMeta) => (meta.regime ? { entry_context: { regime: meta.regime.regime, trend: meta.regime.trend, adx: meta.regime.adx } } : {});
+/** What the ticket knew about the market when the order was placed, kept with the trade for the post-trade review: the system's read (regime, trend, ADX)
+ * and the person's own read when they pinned one. `overridden` is set when the system had a clear read and the person chose a different one. */
+export function contextOf(t: Pick<Ticket, "planState">, meta: Pick<BuildMeta, "regime">) {
+  const system = meta.regime && (meta.regime.regime === "trending_up" || meta.regime.regime === "trending_down" || meta.regime.regime === "ranging") ? meta.regime.regime : null;
+  const overridden = t.planState != null && system != null && t.planState !== system;
+  if (!meta.regime && t.planState == null) return {};
+  return {
+    entry_context: {
+      ...(meta.regime ? { regime: meta.regime.regime, trend: meta.regime.trend, adx: meta.regime.adx } : {}),
+      ...(t.planState != null ? { person_read: t.planState } : {}),
+      ...(overridden ? { overridden: true } : {}),
+    },
+  };
+}
 
 export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: BuildMeta): OrderRequest {
   const journal = {
@@ -454,7 +467,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal, ...contextOf(t, meta),
         // An option order waits with the exact legs the ticket showed (a strike per leg and the expiry they came from), not a fresh pick when it fires.
         ...(t.strategy !== "future" && t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
         ...(t.strategy === "spread" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
@@ -470,7 +483,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, fire_when_open: true, ...(a.entry != null ? { trigger_price: a.entry } : {}),
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal, ...contextOf(t, meta),
         ...(t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
         ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
         ...(t.expiry != null ? { expiry: t.expiry } : {}),
@@ -488,7 +501,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, instrument_type: meta.instrument, price: a.entry, order_type: "market", ...qty,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal, ...contextOf(meta),
+        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal, ...contextOf(t, meta),
       },
     };
   }
@@ -505,7 +518,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
       ...(t.holdOvernight ? { positional: true } : {}),
-      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal, ...contextOf(meta),
+      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal, ...contextOf(t, meta),
     },
     stop: a.stop,
     target: a.target,

@@ -56,7 +56,7 @@ def test_suggestions_put_the_study_failure_first_and_map_the_discipline_mistakes
 def test_without_context_nothing_about_the_trend_is_guessed():
     out = tr.suggest("BUY", ["low_rr"], None)
     assert [t["tag"] for t in out["tags"]] == ["low_rr"] and out["root_cause"] == "plan" and out["had_context"] is False
-    assert tr.suggest("BUY", [], {"regime": "trending_up"}) == {"tags": [], "root_cause": None, "had_context": True}
+    assert tr.suggest("BUY", [], {"regime": "trending_up"}) == {"tags": [], "root_cause": None, "had_context": True, "override": None}
 
 
 def test_the_entry_context_keeps_only_the_fields_the_review_uses():
@@ -119,3 +119,46 @@ def test_the_summary_costs_each_level_and_tag_and_counts_what_is_still_unreviewe
     assert s["by_tag"]["no_stop"]["n"] == 2 and s["by_tag"]["no_stop"]["pnl"] == -1500.0 and s["by_tag"]["no_stop"]["level"] == "plan"
     assert s["clean"]["n"] == 2 and s["clean"]["lost"] == 1 and s["flawed"]["pnl"] == -1500.0
     assert s["trades_since_last"] == {"against_trend": 3, "no_stop": 2}
+
+
+# ---- the person's own read of the market, and overriding the system's
+
+OVER = {"regime": "trending_up", "trend": "up", "adx": 30.0, "person_read": "ranging", "overridden": True}
+
+
+def test_the_entry_context_keeps_the_persons_read_and_the_override_flag():
+    assert tr.clean_context(OVER) == {"regime": "trending_up", "trend": "up", "adx": 30.0, "person_read": "ranging", "overridden": True}
+    assert tr.clean_context({"regime": "ranging", "person_read": "bogus", "overridden": "yes"}) == {"regime": "ranging"}
+
+
+def test_an_override_pays_off_only_when_the_plan_held_and_the_trade_won_at_least_1r():
+    v = lambda **k: tr.override_verdict(OVER, **{"stop0": 98.0, "target0": 104.0, "planned_rr": 2.0, "exit_r": 2.0, "pnl": 500.0, "min_rr": 2.0, **k})
+    assert v() == "paid_off"
+    assert v(exit_r=1.0) == "paid_off"  # exactly 1R is enough
+    assert v(exit_r=0.6) == "small_win"
+    assert v(pnl=-300.0, exit_r=-1.0) == "lost"
+    # a win never rescues an incomplete plan: no stop, no target, or reward-to-risk under the minimum
+    assert v(stop0=None) == "weak_plan" and v(target0=None) == "weak_plan" and v(planned_rr=1.2) == "weak_plan" and v(planned_rr=None) == "weak_plan"
+    assert v(planned_rr=1.995) == "paid_off"  # a rounding sliver under the minimum is not a miss
+
+
+def test_no_override_means_no_verdict():
+    args = dict(stop0=98.0, target0=104.0, planned_rr=2.0, exit_r=2.0, pnl=500.0, min_rr=2.0)
+    assert tr.override_verdict(None, **args) is None
+    assert tr.override_verdict({"regime": "trending_up"}, **args) is None
+    assert tr.override_verdict({"regime": "trending_up", "person_read": "trending_up"}, **args) is None
+
+
+def test_a_paid_off_override_clears_against_the_trend_and_a_small_win_is_left_alone():
+    ctx = {"regime": "trending_down", "adx": 28.0, "overridden": True}
+    assert tr.suggest("BUY", [], ctx, None)["tags"][0]["tag"] == "against_trend"  # without an override it is suggested as before
+    assert tr.suggest("BUY", [], ctx, "paid_off")["tags"] == []
+    assert tr.suggest("BUY", [], ctx, "small_win")["tags"] == []
+    lost = tr.suggest("BUY", [], ctx, "lost")
+    assert lost["tags"][0]["tag"] == "against_trend" and "overrode" in lost["tags"][0]["why"] and lost["override"]["verdict"] == "lost"
+    assert tr.suggest("BUY", [], ctx, "weak_plan")["tags"][0]["tag"] == "against_trend"
+
+
+def test_an_override_is_reported_even_when_the_side_agreed_with_the_system():
+    out = tr.suggest("BUY", [], {"regime": "trending_up", "overridden": True}, "paid_off")
+    assert out["tags"] == [] and out["override"]["verdict"] == "paid_off"

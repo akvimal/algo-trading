@@ -42,8 +42,23 @@ def _by_day(facts: Iterable[TradeFacts]) -> dict[date, list[TradeFacts]]:
     return days
 
 
-def manual_sessions(facts: Iterable[TradeFacts], limit: int = SESSIONS) -> list[dict]:
-    """Each session: its date, how many trades closed, how many are still unreviewed, and per level `{ok, of, rate, band}` over the reviewed ones."""
+def _failed_level(f: TradeFacts, level: str, verdicts: dict[str, Optional[str]]) -> bool:
+    """Whether a reviewed trade made a mistake at this level. One exception: 'against the trend' does not count against Study when the person overrode the
+    system's read and it paid off (the plan held and the trade won at least 1R)."""
+    for tag in f.mistake_tags or []:
+        if TAG_LEVEL.get(tag) != level:
+            continue
+        if tag == "against_trend" and verdicts.get(f.id) == "paid_off":
+            continue
+        return True
+    return False
+
+
+def manual_sessions(facts: Iterable[TradeFacts], limit: int = SESSIONS, verdicts: Optional[dict[str, Optional[str]]] = None) -> list[dict]:
+    """Each session: its date, how many trades closed, how many are still unreviewed, and per level `{ok, of, rate, band}` over the reviewed ones.
+    `verdicts` maps a trade id to trade_review.override_verdict's answer; `overrides` and `paid_off` count, per session, the trades where the person overrode the
+    system's read of the market and how many of those paid off."""
+    verdicts = verdicts or {}
     out = []
     for day, rows in sorted(_by_day(facts).items(), reverse=True)[:limit]:
         reviewed = [f for f in rows if f.root_cause]
@@ -52,10 +67,14 @@ def manual_sessions(facts: Iterable[TradeFacts], limit: int = SESSIONS) -> list[
             if not reviewed:
                 cells[GRID_LEVELS[level]] = {"ok": 0, "of": 0, "rate": None, "band": "none"}
                 continue
-            ok = sum(1 for f in reviewed if not any(TAG_LEVEL.get(t) == level for t in (f.mistake_tags or [])))
+            ok = sum(1 for f in reviewed if not _failed_level(f, level, verdicts))
             rate = ok / len(reviewed)
             cells[GRID_LEVELS[level]] = {"ok": ok, "of": len(reviewed), "rate": round(rate, 3), "band": band(rate)}
-        out.append({"date": day.isoformat(), "trades": len(rows), "unreviewed": len(rows) - len(reviewed), **cells})
+        overridden = [f for f in rows if verdicts.get(f.id)]
+        out.append({
+            "date": day.isoformat(), "trades": len(rows), "unreviewed": len(rows) - len(reviewed), **cells,
+            "overrides": len(overridden), "paid_off": sum(1 for f in overridden if verdicts.get(f.id) == "paid_off"),
+        })
     return out
 
 

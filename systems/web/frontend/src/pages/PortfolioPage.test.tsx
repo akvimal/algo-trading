@@ -112,7 +112,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("Portfolio overview", () => {
   it("shows equity, the change since the reset, performance in plain words, and graduation", async () => {
     happy();
-    renderAt("/portfolio");
+    renderAt("/performance");
     expect(await screen.findByText("₹2,01,430")).toBeInTheDocument();
     expect(screen.getByText(/\+₹1,430 \(\+0\.72%\)/)).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /Equity from/ })).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("Portfolio overview", () => {
 
   it("recent fills list an option group once, never its leg", async () => {
     happy();
-    renderAt("/portfolio");
+    renderAt("/performance");
     expect(await screen.findByText("BANKNIFTY")).toBeInTheDocument();
     expect(screen.queryByText("BANKNIFTY-LEG")).not.toBeInTheDocument();
   });
@@ -138,7 +138,7 @@ describe("Portfolio overview", () => {
       "/option-groups": () => json([]),
       "/positions": () => json([]),
     });
-    renderAt("/portfolio");
+    renderAt("/performance");
     expect(await screen.findByText(/No equity history yet/)).toBeInTheDocument();
     expect(await screen.findByText(/once you have closed a trade/)).toBeInTheDocument();
   });
@@ -151,7 +151,7 @@ describe("Portfolio overview", () => {
       "/option-groups": () => json([]),
       "/positions": () => json([]),
     });
-    renderAt("/portfolio");
+    renderAt("/performance");
     expect(await screen.findByText("₹2,01,430")).toBeInTheDocument();
     expect(await screen.findByText(/That did not load/)).toBeInTheDocument();
   });
@@ -159,7 +159,7 @@ describe("Portfolio overview", () => {
   it("switching segment asks for that segment's data", async () => {
     const calls = happy();
     const user = userEvent.setup();
-    renderAt("/portfolio");
+    renderAt("/performance");
     await screen.findByText("₹2,01,430");
     await user.click(screen.getByRole("button", { name: "Commodities" }));
     await waitFor(() => expect(calls.some((c) => c.includes("/equity-history/MCX"))).toBe(true));
@@ -171,9 +171,10 @@ describe("Portfolio positions and history", () => {
   it("lists open positions with a two-step square off, only fetching them on that tab", async () => {
     const calls = happy();
     const user = userEvent.setup();
-    renderAt("/portfolio");
-    await screen.findByText("₹2,01,430");
+    renderAt("/portfolio?tab=history");
+    await screen.findByTestId("history");
     expect(calls.some((c) => c.includes("status=OPEN"))).toBe(false);
+    expect(calls.some((c) => c.includes("/performance/") || c.includes("/equity-history/"))).toBe(false); // results load on their own page
     await user.click(screen.getByRole("tab", { name: "Positions" }));
     expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Square off" })).toBeInTheDocument();
@@ -212,7 +213,7 @@ describe("the positional book", () => {
   it("asks for the positional equity and performance, and does not ask for discipline or graduation", async () => {
     const calls = withSwing();
     const user = userEvent.setup();
-    renderAt("/portfolio");
+    renderAt("/performance");
     await screen.findByText("₹2,01,430");
     await user.click(screen.getByRole("button", { name: "Positional" }));
     await waitFor(() => expect(calls.some((c) => c.includes("/equity-history/NSE") && c.includes("book=positional"))).toBe(true));
@@ -245,7 +246,7 @@ describe("the positional book", () => {
 
   it("commodities have no positional book", async () => {
     withSwing();
-    renderAt("/portfolio?segment=MCX&book=positional");
+    renderAt("/performance?segment=MCX&book=positional");
     await screen.findByText("₹2,01,430");
     expect(screen.queryByRole("button", { name: "Positional" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Review" })).toBeInTheDocument();
@@ -255,7 +256,7 @@ describe("the positional book", () => {
 describe("Review", () => {
   it("explains the score, its parts and the unreviewed journal", async () => {
     happy(62);
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     expect(await screen.findByText("62")).toBeInTheDocument();
     expect(screen.getByText("Getting there")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Greed" })).toHaveAttribute("aria-valuenow", "88");
@@ -270,7 +271,7 @@ describe("Review", () => {
 
   it("does not show a score of zero when there are too few trades", async () => {
     happy(null);
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     expect(await screen.findByText("Not enough trades yet")).toBeInTheDocument();
     expect(screen.getByText(/at least 5 closed trades/)).toBeInTheDocument();
   });
@@ -297,7 +298,7 @@ describe("Review", () => {
     }));
     void base;
     const user = userEvent.setup();
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     expect(await screen.findByTestId("feeling-nudge")).toHaveTextContent("1 trade is waiting for one tap on how you felt");
     expect(screen.getByText("Fearful · 3")).toBeInTheDocument(); // the mix so far
     const group = within(screen.getByRole("group", { name: "How did you feel about TCS?" }));
@@ -312,7 +313,7 @@ describe("Review", () => {
 
   it("does not ask about a trade that went to plan, but lets an answer be seen and changed", async () => {
     happy(62);
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     await screen.findByText("62");
     const infy = within(screen.getByRole("group", { name: "How did you feel about INFY?" }));
     expect(infy.queryByText("How did you feel?")).not.toBeInTheDocument();
@@ -321,7 +322,7 @@ describe("Review", () => {
 
   it("shows the credentials shelf: levels, progress to the next, a lapse, and what needs setting up", async () => {
     happy(62);
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     await screen.findByText("62");
     const shelf = within(screen.getByTestId("credentials-shelf"));
     expect(shelf.getByText(/do not affect going live/)).toBeInTheDocument();
@@ -340,11 +341,29 @@ describe("Review", () => {
 
   it("shows what price did after an early exit, and each trade's exit in plain words", async () => {
     happy(62);
-    renderAt("/portfolio?tab=review");
+    renderAt("/performance?tab=review");
     await screen.findByText("62");
     const list = within(screen.getByTestId("discipline-trades"));
     expect(list.getByText(/Trailed too tight/)).toBeInTheDocument();
     expect(list.getByText(/Stopped out as planned/)).toBeInTheDocument();
     expect(list.getByTestId("what-if")).toHaveTextContent("Price went another 1.4R your way after you left, and reached your target.");
+  });
+});
+
+describe("Portfolio and Performance are two pages", () => {
+  it("an old link to the review tab on /portfolio lands on Performance", async () => {
+    happy(62);
+    renderAt("/portfolio?tab=review");
+    expect(await screen.findByRole("heading", { name: "Performance" })).toBeInTheDocument();
+    expect(await screen.findByText("Getting there")).toBeInTheDocument();
+  });
+
+  it("Performance has Overview and Review, Portfolio has Positions and History", async () => {
+    happy();
+    renderAt("/performance");
+    await screen.findByText("₹2,01,430");
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Positions" })).not.toBeInTheDocument();
   });
 });

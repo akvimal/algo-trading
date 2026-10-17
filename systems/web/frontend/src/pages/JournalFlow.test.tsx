@@ -204,7 +204,7 @@ describe("Review tab journal", () => {
   it("lists trades to review and opens the same form", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={["/portfolio?tab=review"]}>
+      <MemoryRouter initialEntries={["/performance?tab=review"]}>
         <AuthProvider>
           <App />
         </AuthProvider>

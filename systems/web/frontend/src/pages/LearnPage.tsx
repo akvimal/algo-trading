@@ -75,7 +75,7 @@ function HabitList({ summary, segment }: { summary: MistakeSummary; segment: Seg
         <div className="card" data-testid="review-first">
           <strong>{summary.pending} closed trade{summary.pending === 1 ? " is" : "s are"} not reviewed yet.</strong>{" "}
           <span className="dim">This list is only as accurate as your reviews.</span>{" "}
-          <Link to={`/portfolio?segment=${segment}&tab=review`}>Review now</Link>
+          <Link to={`/performance?segment=${segment}&tab=review`}>Review now</Link>
         </div>
       )}
       {rows.length === 0 ? (

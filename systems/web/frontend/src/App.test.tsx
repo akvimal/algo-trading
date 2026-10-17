@@ -162,7 +162,7 @@ describe("Today", () => {
     expect(screen.getByText("82")).toBeInTheDocument(); // discipline score, in the gauge
     expect(screen.getByText("Good")).toBeInTheDocument(); // discipline band
     expect(screen.getByTestId("feeling-link")).toHaveTextContent("2 to tag"); // trades waiting for a one-tap feeling
-    expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/portfolio?segment=NSE&tab=review");
+    expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=review");
   });
 
   it("squares off only after an explicit confirm", async () => {

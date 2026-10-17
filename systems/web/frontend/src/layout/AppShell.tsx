@@ -49,6 +49,16 @@ const LEARN_ICON = (
   </svg>
 );
 
+/** Performance sits beside Portfolio in the sidebar; on a phone the bottom bar is full at five, so it is reached from the Portfolio page or More. */
+const PERFORMANCE_ICON = (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+    <path d="M4 20V10" />
+    <path d="M10 20V4" />
+    <path d="M16 20v-7" />
+    <path d="M22 20H2" />
+  </svg>
+);
+
 export const NAV = [
   { to: "/", label: "Today", icon: Icon.today, end: true },
   { to: "/scan", label: "Scan", icon: Icon.scan },
@@ -129,6 +139,12 @@ export function AppShell() {
               {item.icon}
               <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
             </NavLink>
+            {item.to === "/portfolio" && (
+              <NavLink to="/performance" className="nav-desk-only" title={collapsed ? "Performance" : undefined}>
+                {PERFORMANCE_ICON}
+                <span className={collapsed ? "sr-only" : undefined}>Performance</span>
+              </NavLink>
+            )}
           </Fragment>
         ))}
         {session?.email && (

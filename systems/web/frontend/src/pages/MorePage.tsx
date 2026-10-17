@@ -132,6 +132,17 @@ export function MorePage() {
         </div>
       )}
       <div className="card">
+        <Link to="/performance" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Performance</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              Equity, results, discipline and the review of your closed trades
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <Link to="/learn" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Learn</strong>

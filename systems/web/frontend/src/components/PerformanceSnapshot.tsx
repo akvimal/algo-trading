@@ -92,7 +92,7 @@ export function PerformanceSnapshot({ markets }: { markets: Segment[] }) {
                   {BAND_TEXT[band]}
                 </span>
                 {d.needs_emotion > 0 && (
-                  <Link to={`/portfolio?segment=${segment}&tab=review`} className="faint" style={{ fontSize: 11 }} data-testid="feeling-link">
+                  <Link to={`/performance?segment=${segment}&tab=review`} className="faint" style={{ fontSize: 11 }} data-testid="feeling-link">
                     {d.needs_emotion} to tag
                   </Link>
                 )}
@@ -108,7 +108,7 @@ export function PerformanceSnapshot({ markets }: { markets: Segment[] }) {
           </div>
         )}
         <p style={{ margin: "12px 0 0" }}>
-          <Link to={`/portfolio?segment=${segment}&tab=review`}>See the full breakdown →</Link>
+          <Link to={`/performance?segment=${segment}&tab=review`}>See the full breakdown →</Link>
         </p>
       </div>
     </>

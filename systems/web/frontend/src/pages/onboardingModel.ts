@@ -85,7 +85,7 @@ export function firstWeek(positions: Position[], groups: OptionGroup[]): FirstWe
   return [
     { id: "planned", title: "Place a planned trade", hint: "Entry, stop-loss and target first.", done: planned, to: "/trade" },
     { id: "why", title: "Write down why", hint: "Tag the setup or add a note on a trade.", done: why, to: "/portfolio?tab=history" },
-    { id: "review", title: "Review a closed trade", hint: "Say whether you followed your plan.", done: review, to: "/portfolio?tab=review" },
+    { id: "review", title: "Review a closed trade", hint: "Say whether you followed your plan.", done: review, to: "/performance?tab=review" },
   ];
 }
 

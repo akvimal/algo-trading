@@ -141,10 +141,10 @@ export const PARTS: Part[] = [
 export const READINESS_HELP: Record<string, { meaning: string; to: string; action: string }> = {
   costs: { meaning: "Paper results without charges and slippage flatter you. Realistic costs show what a strategy really earns.", to: "/more/settings", action: "Open Settings" },
   trades: { meaning: "A handful of trades proves nothing. A record needs enough costed trades to mean something.", to: "/trade", action: "Place a paper trade" },
-  days: { meaning: "A record also needs time, so it covers different market conditions, not one good week.", to: "/portfolio", action: "See your record" },
+  days: { meaning: "A record also needs time, so it covers different market conditions, not one good week.", to: "/performance", action: "See your record" },
   discipline: { meaning: "The habit score: plan before entry, follow the plan, review after. It is the best early sign of staying alive with real money.", to: "#habits", action: "Fix a habit below" },
-  drawdown: { meaning: "How far the account fell from its peak. A deep drawdown means the risk per trade was too big or the habits slipped.", to: "/portfolio", action: "See your record" },
-  profit: { meaning: "Net profit after costs must be above zero. It is the result of the other checks, not a goal to chase directly.", to: "/portfolio", action: "See your record" },
+  drawdown: { meaning: "How far the account fell from its peak. A deep drawdown means the risk per trade was too big or the habits slipped.", to: "/performance", action: "See your record" },
+  profit: { meaning: "Net profit after costs must be above zero. It is the result of the other checks, not a goal to chase directly.", to: "/performance", action: "See your record" },
 };
 
 /** The short name on each readiness tile (the server's label is a full sentence). */

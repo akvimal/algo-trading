@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import type { Book, DisciplineV2, EquityHistory, LiveEligibility, MistakeSummary, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
@@ -13,14 +13,17 @@ import { ReviewTab } from "./portfolio/ReviewTab";
 import { closedTrades, unreviewed } from "./portfolioModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
+/** Two pages share this screen: Portfolio is what you hold and have traded (Positions, History); Performance is how you are doing (Overview, Review). */
+type View = "portfolio" | "performance";
 const TABS = [
-  { id: "overview", label: "Overview" },
-  { id: "positions", label: "Positions" },
-  { id: "history", label: "History" },
-  { id: "review", label: "Review" },
+  { id: "overview", label: "Overview", view: "performance" },
+  { id: "review", label: "Review", view: "performance" },
+  { id: "positions", label: "Positions", view: "portfolio" },
+  { id: "history", label: "History", view: "portfolio" },
 ] as const;
+const PATH: Record<View, string> = { portfolio: "/portfolio", performance: "/performance" };
 // The discipline review is about the everyday habit; the positional book has no Review tab.
-const BOOK_TABS = (book: Book) => TABS.filter((t) => book === "intraday" || t.id !== "review");
+const BOOK_TABS = (view: View, book: Book) => TABS.filter((t) => t.view === view && (book === "intraday" || t.id !== "review"));
 type TabId = (typeof TABS)[number]["id"];
 
 const SEGMENT_LABEL: Record<Segment, string> = { NSE: "Stocks & F&O", MCX: "Commodities", CRYPTO: "Crypto" };
@@ -28,9 +31,8 @@ const SEGMENT_LABEL: Record<Segment, string> = { NSE: "Stocks & F&O", MCX: "Comm
 function parseSegment(v: string | null): Segment {
   return (SEGMENTS as readonly string[]).includes(v ?? "") ? (v as Segment) : "NSE";
 }
-function parseTab(v: string | null): TabId {
-  return TABS.some((t) => t.id === v) ? (v as TabId) : "overview";
-}
+/** The page a tab belongs to, so an old link (/portfolio?tab=review) still lands on the right one. */
+const viewOf = (v: string | null): View | null => TABS.find((t) => t.id === v)?.view ?? null;
 
 /** Which book a trade belongs to: a multi-day hold is positional, everything else (and every option spread) is the everyday book. */
 const inBook = (p: Pick<Position, "horizon">, book: Book) => (p.horizon === "positional") === (book === "positional");
@@ -52,27 +54,35 @@ async function loadClosed(segment: Segment, book: Book) {
   return closedTrades(positions.filter((p) => inBook(p, book)), groupsIn(groups, book));
 }
 
-export function PortfolioPage() {
+export const PortfolioPage = () => <BookPage view="portfolio" />;
+export const PerformancePage = () => <BookPage view="performance" />;
+
+function BookPage({ view }: { view: View }) {
   const [params, setParams] = useSearchParams();
   const { markets } = useProfile();
   const segment = parseSegment(params.get("segment"));
   // Commodities have no spot, so no positional book: asking for one there shows the everyday account.
   const book: Book = segment !== "MCX" && params.get("book") === "positional" ? "positional" : "intraday";
-  const tab = BOOK_TABS(book).some((t) => t.id === params.get("tab")) ? parseTab(params.get("tab")) : "overview";
+  const viewTabs = BOOK_TABS(view, book);
+  const tab: TabId = viewTabs.find((t) => t.id === params.get("tab"))?.id ?? viewTabs[0].id;
+  const owner = viewOf(params.get("tab"));
+  const elsewhere = owner && owner !== view ? owner : null; // an old link to a tab that now lives on the other page
   const set = (next: Record<string, string>) => setParams({ segment, tab, ...(book === "positional" ? { book } : {}), ...next }, { replace: true });
   const bookQuery = book === "positional" ? "&book=positional" : "";
 
   // Each block loads on its own so one failing endpoint never blanks the others.
-  const equity = useResource(() => api<EquityHistory>("execution", `/equity-history/${segment}?days=90${bookQuery}`), [segment, book]);
-  const perf = useResource(() => api<Performance>("execution", `/performance/${segment}${book === "positional" ? "?book=positional" : ""}`), [segment, book]);
+  const results = view === "performance" && !elsewhere;
+  const equity = useResource(() => api<EquityHistory>("execution", `/equity-history/${segment}?days=90${bookQuery}`), [segment, book], { enabled: results });
+  const perf = useResource(() => api<Performance>("execution", `/performance/${segment}${book === "positional" ? "?book=positional" : ""}`), [segment, book], { enabled: results });
   // Discipline and the live-trading graduation are about the everyday account only.
-  const discipline = useResource(() => api<DisciplineV2>("execution", `/discipline/${segment}`), [segment], { enabled: book === "intraday" });
-  const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment], { enabled: book === "intraday" });
-  const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment], { enabled: book === "intraday" });
+  const discipline = useResource(() => api<DisciplineV2>("execution", `/discipline/${segment}`), [segment], { enabled: results && book === "intraday" });
+  const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment], { enabled: results && book === "intraday" });
+  const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment], { enabled: results && book === "intraday" });
   const closed = useResource(() => loadClosed(segment, book), [segment, book]);
   // A saved tag, note or review changes both the trade list and the numbers derived from it.
   const saved = () => {
     closed.reload();
+    if (!results) return;
     perf.reload();
     discipline.reload();
     mistakes.reload();
@@ -80,9 +90,19 @@ export function PortfolioPage() {
   const open = useResource(() => loadOpen(segment, book), [segment, book], { pollMs: 15_000, enabled: tab === "positions" });
   const live = useLivePositions(tab === "positions" ? open.data?.positions : undefined);
 
+  if (elsewhere) return <Navigate to={`${PATH[elsewhere]}?${params.toString()}`} replace />;
+  const reviewHref = `/performance?segment=${segment}&tab=review${book === "positional" ? "&book=positional" : ""}`;
+
   return (
     <div className="stack">
-      <h1>Portfolio</h1>
+      <h1>{view === "portfolio" ? "Portfolio" : "Performance"}</h1>
+      <p className="dim" style={{ margin: 0 }}>
+        {view === "portfolio" ? (
+          <>What you hold and what you have traded. <Link to={`/performance?segment=${segment}`}>How you are doing →</Link></>
+        ) : (
+          <>How you are doing: results, discipline and what to review. <Link to={`/portfolio?segment=${segment}`}>Positions and history →</Link></>
+        )}
+      </p>
       <div className="chips" role="group" aria-label="Account">
         {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
           <button key={s} aria-pressed={segment === s} onClick={() => set({ segment: s })}>
@@ -100,8 +120,8 @@ export function PortfolioPage() {
           </button>
         </div>
       )}
-      <div className="chips" role="tablist" aria-label="Portfolio sections">
-        {BOOK_TABS(book).map((t) => (
+      <div className="chips" role="tablist" aria-label={view === "portfolio" ? "Portfolio sections" : "Performance sections"}>
+        {viewTabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => set({ tab: t.id })}>
             {t.label}
           </button>
@@ -111,9 +131,9 @@ export function PortfolioPage() {
       {book === "intraday" && tab !== "review" && closed.data && unreviewed(closed.data).length > 0 && (
         <div className="notice" role="status" data-testid="review-nudge">
           {unreviewed(closed.data).length} closed trade{unreviewed(closed.data).length === 1 ? "" : "s"} not reviewed yet: say what went wrong (or that nothing did).{" "}
-          <button className="btn btn-small" onClick={() => set({ tab: "review" })}>
+          <Link className="btn btn-small" to={reviewHref}>
             Review now
-          </button>
+          </Link>
         </div>
       )}
       {tab === "overview" && <OverviewTab equity={equity} perf={perf} elig={book === "intraday" ? elig : null} trades={closed.data} book={book} />}

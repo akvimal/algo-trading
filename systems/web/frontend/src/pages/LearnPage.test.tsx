@@ -85,7 +85,7 @@ describe("LearnPage", () => {
     renderPage();
     expect(await screen.findByText("No reviewed trades yet")).toBeInTheDocument();
     expect(screen.getByTestId("review-first")).toHaveTextContent("3 closed trades are not reviewed yet");
-    expect(screen.getByRole("link", { name: "Review now" })).toHaveAttribute("href", "/portfolio?segment=NSE&tab=review");
+    expect(screen.getByRole("link", { name: "Review now" })).toHaveAttribute("href", "/performance?segment=NSE&tab=review");
   });
 
   it("ranks the person's own mistakes, names the one to start with, and shows the clean run", async () => {

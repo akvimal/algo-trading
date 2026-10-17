@@ -365,12 +365,15 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             <div className="chips" role="group" aria-label="Market state">
               <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
                 <TrendUpIcon />
+                Trending up
               </button>
               <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
                 <TrendDownIcon />
+                Trending down
               </button>
               <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
                 <RangingIcon />
+                Ranging
               </button>
             </div>
             <div className="chips" role="group" aria-label="Plan">
@@ -384,6 +387,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
                   onClick={() => choosePlan(k.value)}
                 >
                   {PLAN_ICON[k.value]}
+                  {k.label}
                 </button>
               ))}
             </div>

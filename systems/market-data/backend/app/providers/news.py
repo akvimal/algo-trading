@@ -13,6 +13,7 @@ from app.adapters.db.models import NewsHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import ai_models, news_scores
+from app.domain.ai_language import ENGLISH_RULE, english_only
 from app.domain.ai_retry import post_json
 from app.domain.models import NewsArticle, NewsDigest
 
@@ -347,7 +348,7 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
                             "only on the headlines/summaries given - never invent facts, prices, or events not "
                             "present in them. Score ONLY the articles under new_articles (return only those in "
                             "'articles'). already_scored_relevant lists articles you judged earlier, with their "
-                            "scores: do not return or re-score them, but let them inform the overall bias and digest."
+                            "scores: do not return or re-score them, but let them inform the overall bias and digest. " + ENGLISH_RULE
                         ),
                     },
                     {
@@ -368,7 +369,7 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
                 "max_tokens": 2000,
             },
             60,  # a reasoning model that needs a second, larger attempt (ai_retry.post_json) takes longer
-            _parse_ai_json,
+            english_only(_parse_ai_json),
         )
 
         new_by_url = {row["url"]: row for row in new_rows}

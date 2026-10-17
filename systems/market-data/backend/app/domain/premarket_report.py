@@ -28,6 +28,7 @@ from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
 from app.providers.macro import fetch_macro
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
+from app.domain.ai_language import ENGLISH_RULE, english_only, is_english
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ _SYSTEM_PROMPT = (
     "policy rate = repo minus CPI, the 10Y yield's spread over the repo rate, and recent RBI releases). It is context for "
     "bond yields and sentiment, NOT a daily driver: do not let it override the overnight inputs or the GIFT Nifty gap, and "
     "put what it means in macro_context rather than in the reasons unless it is genuinely decisive today. Some RBI items carry an AI-written summary of their full text (ai_summary_of_full_text): you may use it, but its stance is that summary's reading, not an RBI decision. Quote its figures "
-    "exactly; never infer a forecast, a release date, or what the RBI will or will not do. RBI items are headlines only: say what they are about, not what they signal about policy."
+    "exactly; never infer a forecast, a release date, or what the RBI will or will not do. RBI items are headlines only: say what they are about, not what they signal about policy. " + ENGLISH_RULE
 )
 
 
@@ -139,7 +140,7 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str, macro: Optional[dict] 
                 "max_tokens": 1200,
             },
             90,  # room for a reasoning model's second, larger attempt
-            _parse_ai_json,
+            english_only(_parse_ai_json),
         )
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")
@@ -165,7 +166,7 @@ def today_ist() -> date:
 
 def _same_data(prior: Optional[dict], new_basis: dict) -> bool:
     """Whether `prior`'s AI read still holds: made on numbers within tolerance of these, by the same model, on the same prompt."""
-    if not prior or not prior.get("ai") or not prior.get("model"):
+    if not prior or not prior.get("ai") or not prior.get("model") or not is_english(prior["ai"]):
         return False
     return same_basis(basis(prior["inputs"], prior["rules"], prior["model"], prior.get("macro")), new_basis)
 

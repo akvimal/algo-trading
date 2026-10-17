@@ -29,6 +29,7 @@ from app.domain.premarket_report import _AI_SCHEMA, today_ist
 from app.domain.segment_bias import score_inputs
 from app.providers import segment_brief as provider
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
+from app.domain.ai_language import ENGLISH_RULE, english_only, is_english
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ _COMMON = (
     "lower your confidence, do not guess it. You may disagree with the rule-based score if the inputs justify it, but "
     "then say why in the reasons. Units: change_pct is a percent move; change_bp is a move in basis points (100bp = 1 "
     "percentage point); change_pt is a move in index points. Judge size sensibly and do not call small moves spikes or "
-    "crashes. Quote figures exactly as given."
+    "crashes. Quote figures exactly as given. " + ENGLISH_RULE
 )
 # The morning report's schema minus macro_context: there is no domestic-macro block for these briefs, and asking a small
 # model to fill a field it has nothing for made it write placeholders into the others.
@@ -112,7 +113,7 @@ def run_ai(segment: str, inputs: list[dict], rules: dict, api_key: str) -> dict:
                 "max_tokens": 1200,  # see premarket_report.run_ai: without a cap a small balance 402s
             },
             AI_TIMEOUT_SECONDS,
-            _parse_ai_json,
+            english_only(_parse_ai_json),
         )
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")
@@ -170,7 +171,7 @@ def add_ai(segment: str, brief: dict, api_key: Optional[str], prior: Optional[di
         out["ai_error"] = "No inputs could be fetched."
         return out
     now_basis = basis(brief["inputs"], rules, ai_models.model_for("premarket"), extra=segment)
-    if prior and prior.get("ai") and same_basis(prior.get("ai_basis"), now_basis):
+    if prior and prior.get("ai") and is_english(prior["ai"]) and same_basis(prior.get("ai_basis"), now_basis):
         ai = prior["ai"]
         out.update(
             ai=ai, ai_error=None, model=prior.get("model"), bias=ai["bias"], agree=ai["bias"] == rules["bias"],
@@ -248,6 +249,8 @@ def get_brief(segment: str, api_key: Optional[str], force: bool = False) -> dict
         else:
             base = build_rules_brief(segment)
             base["ai_pending"] = True
+            base["ai_requested_at"] = datetime.now(timezone.utc)  # the page shows how long the read has been in progress, and which model is reading
+            base["ai_model"] = ai_models.model_for("premarket")
             _store(segment, base)
             _upgrade_in_background(segment, base, api_key)
             return base

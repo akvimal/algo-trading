@@ -251,6 +251,9 @@ export type PremarketReport = {
   /** When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed. */
   ai_read_at?: string | null;
   ai_reused?: boolean;
+  /** While ai_pending: when the model was asked, and which model is reading. */
+  ai_requested_at?: string | null;
+  ai_model?: string | null;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";

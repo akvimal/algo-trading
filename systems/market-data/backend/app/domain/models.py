@@ -1049,3 +1049,6 @@ class PremarketReportOut(BaseModel):
     # When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed.
     ai_read_at: Optional[datetime] = None
     ai_reused: bool = False
+    # While ai_pending: when the model was asked and which model it is, so the page can show the read in progress.
+    ai_requested_at: Optional[datetime] = None
+    ai_model: Optional[str] = None

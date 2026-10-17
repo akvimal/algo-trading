@@ -25,6 +25,7 @@ from app.adapters.db.session import SessionLocal
 from app.domain import ai_models
 from app.domain.ai_retry import post_json
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
+from app.domain.ai_language import ENGLISH_RULE, english_only
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ _SYSTEM_PROMPT = (
     "hawkish, dovish or neutral only when the text itself signals a direction for interest-rate, inflation or liquidity "
     "policy; a speech about technology, supervision, payments or financial stability with no such signal is 'not about policy'. "
     "In 'rates', report only what the text explicitly says about rates, inflation or liquidity, or leave it empty. Be brief: "
-    "the summary is at most 70 words of plain prose (no markdown, no bullets, no lists, no bold), and 'rates' is one short sentence."
+    "the summary is at most 70 words of plain prose (no markdown, no bullets, no lists, no bold), and 'rates' is one short sentence. " + ENGLISH_RULE
 )
 
 SUMMARY_MAX_CHARS = 600
@@ -112,7 +113,7 @@ def summarise(title: str, text: str, api_key: str, model: str) -> dict:
             "max_tokens": 900,
         },
         90,
-        _parse_ai_json,
+        english_only(_parse_ai_json),
     )
     if parsed.get("stance") not in STANCES or not str(parsed.get("summary") or "").strip():
         raise ValueError("model reply had no usable summary")

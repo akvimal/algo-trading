@@ -5,6 +5,7 @@ import type { PremarketReport } from "../api/types";
 import { formatPrice, formatTime } from "../format";
 import { useResource } from "../hooks/useResource";
 import { BIAS_LABEL, type BriefSegment, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "../pages/premarketModel";
+import { AiProgress } from "./AiProgress";
 import { ErrorNotice, Skeleton } from "./bits";
 import { InfoFoot, InfoGroup, InfoHead, InfoLead, InfoRow } from "./InfoShell";
 
@@ -67,11 +68,7 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
           The numbers have not meaningfully changed{data.ai_read_at ? ` since the AI read at ${formatTime(data.ai_read_at)}` : " since the last AI read"}, so that read was kept (no new AI call).
         </div>
       )}
-      {data?.ai_pending && (
-        <div className="notice" data-testid="ai-pending">
-          Showing the rule-based read. The AI read is being prepared and will appear here in a moment.
-        </div>
-      )}
+      {data?.ai_pending && <AiProgress report={data} />}
       {!report.loading && !report.error && !data && (
         <div className="card">
           <p className="dim" style={{ margin: 0 }}>

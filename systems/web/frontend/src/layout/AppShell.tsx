@@ -59,6 +59,14 @@ const PERFORMANCE_ICON = (
   </svg>
 );
 
+const MARKETS_ICON = (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18" />
+    <path d="M12 3c2.6 2.4 4 5.6 4 9s-1.4 6.6-4 9c-2.6-2.4-4-5.6-4-9s1.4-6.6 4-9z" />
+  </svg>
+);
+
 export const NAV = [
   { to: "/", label: "Today", icon: Icon.today, end: true },
   { to: "/scan", label: "Scan", icon: Icon.scan },
@@ -116,7 +124,7 @@ export function AppShell() {
   // The trading workstation needs the whole width: no reading-column limit on this one screen.
   const { pathname } = useLocation();
   const wide = pathname.startsWith("/trade");
-  // Today lays positions and the Markets card side by side, so it gets a wider column than the reading pages.
+  // Today lays its account cards side by side, so it gets a wider column than the reading pages.
   const dash = pathname === "/";
   return (
     <div className="app">
@@ -143,6 +151,12 @@ export function AppShell() {
               <NavLink to="/performance" className="nav-desk-only" title={collapsed ? "Performance" : undefined}>
                 {PERFORMANCE_ICON}
                 <span className={collapsed ? "sr-only" : undefined}>Performance</span>
+              </NavLink>
+            )}
+            {item.to === "/portfolio" && (
+              <NavLink to="/markets" className="nav-desk-only" title={collapsed ? "Markets" : undefined}>
+                {MARKETS_ICON}
+                <span className={collapsed ? "sr-only" : undefined}>Markets</span>
               </NavLink>
             )}
           </Fragment>

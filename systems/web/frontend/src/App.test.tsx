@@ -60,7 +60,8 @@ function renderApp(path = "/") {
   );
 }
 
-const sentiment = { exchanges: { NSE: { direction: "bullish", strength: "moderate", score: 0.4, underlyings: [] } } };
+const read = { direction: "bullish", strength: "moderate", score: 0.4, underlyings: [] };
+const sentiment = { exchanges: { NSE: read, MCX: read, CRYPTO: read } }; // every market, so the page does not depend on which one is trading when the test runs
 
 beforeEach(() => {
   setToken(jwt({ sub: "u1", email: "me@x.com", exp: Math.floor(Date.now() / 1000) + 3600 }), "me@x.com");
@@ -135,7 +136,15 @@ describe("Today", () => {
     expect(screen.getByRole("meter", { name: /daily loss budget/i })).toHaveAttribute("aria-valuenow", "350");
     expect(screen.getByText(/SL 2,480/)).toBeInTheDocument();
     expect(screen.getByText(/Target not set/)).toBeInTheDocument();
-    expect(await screen.findByText(/OI bullish · moderate/)).toBeInTheDocument(); // the Markets card's header, for the market trading first
+    expect(screen.queryByRole("region", { name: "Markets" })).not.toBeInTheDocument(); // Markets has its own page now
+    expect(screen.getAllByRole("link", { name: /Markets/ }).every((l) => l.getAttribute("href") === "/markets")).toBe(true);
+  });
+
+  it("Markets is its own page, with the open-interest read for the market trading first", async () => {
+    mockFetch({ "/options/sentiment": () => json(sentiment) });
+    renderApp("/markets");
+    expect(await screen.findByRole("heading", { name: "Markets" })).toBeInTheDocument();
+    expect(await screen.findByText(/OI bullish · moderate/)).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Markets" })).toBeInTheDocument();
   });
 
@@ -199,7 +208,7 @@ describe("Today", () => {
     expect(screen.getByRole("link", { name: "Add Dhan keys" })).toBeInTheDocument();
   });
 
-  it("keeps positions on screen when only the market pulse fails", async () => {
+  it("Today stays fine, and Markets says so, when the market pulse fails", async () => {
     mockFetch({
       "/accounts": () => json([account]),
       "/option-groups": () => json([]),
@@ -209,7 +218,8 @@ describe("Today", () => {
       "/options/sentiment": () => json({ detail: "boom" }, 500),
     });
     renderApp("/");
-    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
+    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument(); // Today does not need the market pulse at all
+    renderApp("/markets");
     expect(await screen.findByText(/OI read unavailable/)).toBeInTheDocument();
   });
 

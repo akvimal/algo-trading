@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NextStep } from "../components/nav";
+import { LinkRow, NextStep } from "../components/nav";
 import { api } from "../api/http";
 import { listWaitingOrders } from "../api/trade";
 import type { Account, PendingOrder } from "../api/types";
@@ -7,7 +7,6 @@ import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { AccountCard } from "../components/AccountCard";
-import { MarketsCard } from "../components/MarketsCard";
 import { hasSessions, SessionGrids, useSessionGrids } from "../components/SessionGrid";
 import { PositionCard } from "../components/PositionCard";
 import { WaitingOrders } from "../components/WaitingOrders";
@@ -97,13 +96,6 @@ export function TodayPage() {
 
       {today.error && <ErrorNotice error={today.error} onRetry={today.reload} />}
 
-      {/* One column on a phone (Markets folded under the P&L); from 900px positions on the left and Markets in a sticky column on the right. */}
-      <div className="today-grid">
-      {markets.length > 0 && (
-        <aside className="today-aside">
-          <MarketsCard markets={markets} />
-        </aside>
-      )}
       <div className="stack today-main">
       {/* Once there is a session to show, the last sessions replace the first-week checklist. */}
       {grids.data && hasSessions(grids.data) ? <SessionGrids grids={grids.data} /> : guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
@@ -132,7 +124,7 @@ export function TodayPage() {
 
       <WaitingOrders orders={shownWaiting} onChanged={today.reload} />
 
-      </div>
+      <LinkRow to="/markets" title="Markets" hint="Pre-market bias, headlines, the calendar and open interest" />
       </div>
     </div>
   );

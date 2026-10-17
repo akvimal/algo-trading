@@ -9,6 +9,7 @@ import { LearnPage } from "./pages/LearnPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { MorePage } from "./pages/MorePage";
+import { MarketsPage } from "./pages/MarketsPage";
 import { PerformancePage, PortfolioPage } from "./pages/PortfolioPage";
 import { ScanPage } from "./pages/ScanPage";
 import { NotesPage } from "./pages/NotesPage";
@@ -68,6 +69,7 @@ export function App() {
           <Route path="trade" element={<TradePage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="performance" element={<PerformancePage />} />
+          <Route path="markets" element={<MarketsPage />} />
           <Route path="learn" element={<LearnPage />} />
           <Route path="more">
             <Route index element={<MorePage />} />

@@ -132,6 +132,9 @@ export function MorePage() {
         </div>
       )}
       <div className="card">
+        <LinkRow to="/markets" title="Markets" hint="Pre-market bias, headlines, the calendar and open interest" />
+      </div>
+      <div className="card">
         <LinkRow to="/performance" title="Performance" hint="Equity, results, discipline and the review of your closed trades" />
       </div>
       <div className="card">

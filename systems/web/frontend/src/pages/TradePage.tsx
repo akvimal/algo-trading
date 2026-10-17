@@ -30,6 +30,7 @@ import { buildNoteContext } from "../components/notesModel";
 import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
 import { composeTradePicture, type PictureLevels } from "../chart/tradePicture";
+import { TradeStages } from "../components/TradeStages";
 import { TradeTicket } from "../components/TradeTicket";
 import { ScanOptionBias } from "./ScanOptionBias";
 import { formatPnl, formatPrice } from "../format";
@@ -919,11 +920,7 @@ export function TradePage() {
               />
             )}
             {hasOpenForInstrument && (
-              <>
-                <h2 className="section-title" style={{ marginBottom: 2 }}>Open positions</h2>
-                <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }} data-testid="no-second-order">
-                  To add to it, close it first or let its stop or target do it.
-                </p>
+              <TradeStages positions={activeTrades.positions} groups={activeTrades.groups}>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
                     <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} snapshotCapture={takePicture} />
@@ -932,7 +929,7 @@ export function TradePage() {
                     <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} snapshotCapture={takePicture} />
                   ))}
                 </div>
-              </>
+              </TradeStages>
             )}
             {mine.length > 0 && (
               <>

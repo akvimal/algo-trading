@@ -78,6 +78,7 @@ export type Position = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  entry_context?: EntryContext | null;
 };
 
 /** One leg of an option group, as the groups API returns it. `live_price`/`unrealized_pnl` only come with `with_live_pnl=true`. */
@@ -141,6 +142,7 @@ export type OptionGroup = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  entry_context?: EntryContext | null;
   legs?: OptionLeg[];
 };
 
@@ -770,3 +772,6 @@ export type BotSession = {
   date: string; trades: number; pnl: number; wins: number; win_rate: number; result: GridBand; wins_band: GridBand; clean: GridBand; no_stop: number; failed: number;
 };
 export type SessionGrids = { manual: ManualSession[]; bot: BotSession[]; /** Over the sessions shown: how often the person overrode the system's read of the market, and how often it paid off. */ overrides?: { total: number; paid_off: number } };
+
+/** The read of the market kept with an order (see execution's trade_review.clean_context): the system's, and the person's own when they changed it. */
+export type EntryContext = { regime?: string; trend?: string; adx?: number; person_read?: string; overridden?: boolean };

@@ -93,7 +93,7 @@ type StepTone = "good" | "warn" | "na";
 
 /** One step of the ticket (Study, Plan). A header that says what is in it, and a body. On a phone only the open step's body shows (the rest is
  * CSS, so nothing leaves the page: every field stays reachable); on a wide screen every body is open and the header is just a label. */
-function TicketStep({ n, title, summary, tone, open, onToggle, children, testId }: { n: number; title: string; summary: string; tone: StepTone; open: boolean; onToggle: () => void; children: React.ReactNode; testId: string }) {
+export function TicketStep({ n, title, summary, tone, open, onToggle, children, testId }: { n: number; title: string; summary: string; tone: StepTone; open: boolean; onToggle: () => void; children: React.ReactNode; testId: string }) {
   return (
     <section className={`tstep tstep-${n}${open ? " open" : ""}`} data-testid={testId}>
       <button type="button" className="tstep-head" aria-expanded={open} onClick={onToggle}>

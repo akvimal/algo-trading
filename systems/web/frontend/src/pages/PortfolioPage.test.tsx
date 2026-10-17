@@ -254,9 +254,12 @@ describe("the positional book", () => {
 });
 
 describe("Review", () => {
-  it("explains the score, its parts and the unreviewed journal", async () => {
+  it("explains the score, its parts and the unreviewed journal, one section at a time", async () => {
     happy(62);
+    const user = userEvent.setup();
     renderAt("/performance?tab=review");
+    expect(await screen.findByText(/3 of 3 closed trades still need a review/)).toBeInTheDocument(); // trades waiting: it opens on those
+    await user.click(screen.getByRole("button", { name: "Discipline" }));
     expect(await screen.findByText("62")).toBeInTheDocument();
     expect(screen.getByText("Getting there")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Greed" })).toHaveAttribute("aria-valuenow", "88");
@@ -264,22 +267,23 @@ describe("Review", () => {
     expect(screen.getByRole("meter", { name: "Patience" })).toHaveAttribute("aria-valuenow", "71");
     expect(screen.getByTestId("coaching-line")).toHaveTextContent("took more size than the system's risk sizing allowed");
     expect(screen.getByText("Sized above plan · 2")).toBeInTheDocument(); // the costliest habits, in plain words
+    await user.click(screen.getByRole("button", { name: "Costs and setups" }));
     expect(within(screen.getByRole("table")).getByText("Breakout")).toBeInTheDocument();
-    expect(screen.getByText(/3 of 3 closed trades still need a review/)).toBeInTheDocument();
     expect(screen.getByText("₹50")).toBeInTheDocument(); // charges
   });
 
-  it("puts the trades still to review at the top, above the score", async () => {
+  it("opens on the trades still to review, and keeps the score on its own section", async () => {
     happy(62);
     renderAt("/performance?tab=review");
-    const heading = await screen.findByRole("heading", { name: "To review" });
-    expect(heading.compareDocumentPosition(await screen.findByText("Getting there")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "To review" })).toBeInTheDocument();
     expect(screen.getAllByText(/tap to review/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Getting there")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "To review (3)" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("does not show a score of zero when there are too few trades", async () => {
     happy(null);
-    renderAt("/performance?tab=review");
+    renderAt("/performance?tab=review&section=discipline");
     expect(await screen.findByText("Not enough trades yet")).toBeInTheDocument();
     expect(screen.getByText(/at least 5 closed trades/)).toBeInTheDocument();
   });
@@ -306,7 +310,7 @@ describe("Review", () => {
     }));
     void base;
     const user = userEvent.setup();
-    renderAt("/performance?tab=review");
+    renderAt("/performance?tab=review&section=discipline");
     expect(await screen.findByTestId("feeling-nudge")).toHaveTextContent("1 trade is waiting for one tap on how you felt");
     expect(screen.getByText("Fearful · 3")).toBeInTheDocument(); // the mix so far
     const group = within(screen.getByRole("group", { name: "How did you feel about TCS?" }));
@@ -321,7 +325,7 @@ describe("Review", () => {
 
   it("does not ask about a trade that went to plan, but lets an answer be seen and changed", async () => {
     happy(62);
-    renderAt("/performance?tab=review");
+    renderAt("/performance?tab=review&section=discipline");
     await screen.findByText("62");
     const infy = within(screen.getByRole("group", { name: "How did you feel about INFY?" }));
     expect(infy.queryByText("How did you feel?")).not.toBeInTheDocument();
@@ -330,7 +334,7 @@ describe("Review", () => {
 
   it("shows the credentials shelf: levels, progress to the next, a lapse, and what needs setting up", async () => {
     happy(62);
-    renderAt("/performance?tab=review");
+    renderAt("/performance?tab=review&section=discipline");
     await screen.findByText("62");
     const shelf = within(screen.getByTestId("credentials-shelf"));
     expect(shelf.getByText(/do not affect going live/)).toBeInTheDocument();
@@ -349,7 +353,7 @@ describe("Review", () => {
 
   it("shows what price did after an early exit, and each trade's exit in plain words", async () => {
     happy(62);
-    renderAt("/performance?tab=review");
+    renderAt("/performance?tab=review&section=discipline");
     await screen.findByText("62");
     const list = within(screen.getByTestId("discipline-trades"));
     expect(list.getByText(/Trailed too tight/)).toBeInTheDocument();
@@ -363,7 +367,7 @@ describe("Portfolio and Performance are two pages", () => {
     happy(62);
     renderAt("/portfolio?tab=review");
     expect(await screen.findByRole("heading", { name: "Performance" })).toBeInTheDocument();
-    expect(await screen.findByText("Getting there")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "To review" })).toBeInTheDocument();
   });
 
   it("Performance has Overview and Review, Portfolio has Positions and History", async () => {

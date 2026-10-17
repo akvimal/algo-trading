@@ -269,6 +269,14 @@ describe("Review", () => {
     expect(screen.getByText("₹50")).toBeInTheDocument(); // charges
   });
 
+  it("puts the trades still to review at the top, above the score", async () => {
+    happy(62);
+    renderAt("/performance?tab=review");
+    const heading = await screen.findByRole("heading", { name: "To review" });
+    expect(heading.compareDocumentPosition(await screen.findByText("Getting there")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText(/tap to review/).length).toBeGreaterThan(0);
+  });
+
   it("does not show a score of zero when there are too few trades", async () => {
     happy(null);
     renderAt("/performance?tab=review");

@@ -17,8 +17,25 @@ export function ReviewTab({ perf, discipline, mistakes, trades, onSaved }: Props
   const owed = unreviewed(trades);
   const setups = bySetup(manual);
 
+  // Trades still owing a review come first: that is what the person is here to do. With none owed it is a quiet note at the end.
+  const journal = (
+    <>
+      <h2 className="section-title">{owed.length > 0 ? "To review" : "Journal"}</h2>
+      <div className="card">
+        <p style={{ marginTop: 0 }}>
+          {owed.length === 0 ? "Every closed trade is reviewed." : `${owed.length} of ${manual.length} closed trades still need a review.`}
+        </p>
+        {owed.slice(0, 8).map((t) => (
+          <TradeListItem key={t.id} trade={t} onSaved={onSaved} cta="tap to review" />
+        ))}
+        {owed.length > 8 && <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>Showing the 8 most recent. Review these and the rest appear.</p>}
+      </div>
+    </>
+  );
+
   return (
     <div className="stack">
+      {owed.length > 0 && journal}
       <DisciplineCard resource={discipline} />
       {discipline.data && <CredentialsShelf credentials={discipline.data.credentials ?? []} />}
 
@@ -70,16 +87,7 @@ export function ReviewTab({ perf, discipline, mistakes, trades, onSaved }: Props
         </div>
       )}
 
-      <h2 className="section-title">Journal</h2>
-      <div className="card">
-        <p style={{ marginTop: 0 }}>
-          {owed.length === 0 ? "Every closed trade is reviewed." : `${owed.length} of ${manual.length} closed trades still need a review.`}
-        </p>
-        {owed.slice(0, 8).map((t) => (
-          <TradeListItem key={t.id} trade={t} onSaved={onSaved} cta="tap to review" />
-        ))}
-        {owed.length > 8 && <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>Showing the 8 most recent. Review these and the rest appear.</p>}
-      </div>
+      {owed.length === 0 && journal}
     </div>
   );
 }

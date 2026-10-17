@@ -89,8 +89,6 @@ type Props = {
   /** A host's own controls for the first two steps (the OI-buildup option form's view, and its expiry, legs and exit levels): they sit at the top of Study and of Plan. */
   studyTop?: React.ReactNode;
   planTop?: React.ReactNode;
-  /** A host's save/publish controls for the study: given the study in words ("" while nothing is decided yet), they sit at the end of Study. */
-  studyActions?: (study: { text: string }) => React.ReactNode;
 };
 
 type StepTone = "good" | "warn" | "na";
@@ -115,7 +113,7 @@ export function TicketStep({ n, title, summary, tone, open, onToggle, children, 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop, studyActions }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -231,18 +229,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const overridden = raw.planState != null && read != null && raw.planState !== read;
   const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
   const studySummary = [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup"].filter(Boolean).join(" · ");
-  // The study as a few plain sentences, for saving or publishing it: the side, what the market is doing, the setup and the reason.
-  const studyWords = (() => {
-    const stateText = state == null ? null : state === "ranging" ? "ranging" : state === "trending_up" ? "trending up" : "trending down";
-    const setup = t.setupTag ?? kindLabel;
-    if (!stateText && !setup && !t.reason.trim()) return "";
-    return [
-      `${ctx.symbol}: looking to ${t.action === "BUY" ? "buy" : "sell"}.`,
-      stateText ? `Market ${stateText}${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}${overridden ? ", my read" : ""}.` : null,
-      setup ? `Setup: ${setup}.` : null,
-      t.reason.trim() ? t.reason.trim() : null,
-    ].filter(Boolean).join(" ").slice(0, NOTES_MAX);
-  })();
   const studyTone: StepTone = planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
   const planNow = planStatus(t, a, ctx);
   const legsText = t.primaryStrike != null ? `${t.primaryStrike}${t.secondStrike != null && t.strategy !== "naked" ? ` / ${t.secondStrike}` : ""}` : null;
@@ -466,7 +452,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         );
       })()}
 
-      {studyActions?.({ text: studyWords })}
       <button type="button" className="link-btn tstep-next" onClick={() => setStep(2)}>
         Next: Plan ›
       </button>

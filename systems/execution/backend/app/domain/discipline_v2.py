@@ -243,6 +243,8 @@ def evaluate_trade(t: TradeFacts, cfg: DisciplineConfig) -> TradeScore:
             exit_r = _signed_r(t.action, t.entry_price, risk, t.exit_price)
         if planned_rr is not None and exit_r is not None and exit_r >= planned_rr - _TOL:
             exit_kind, ladder, mistake = "manual_at_plan", 1.0, None
+        elif planned_rr is None and exit_r is not None and exit_r >= cfg.min_rr - _TOL and (t.pnl or 0) > 0:
+            exit_kind, ladder, mistake = "manual_at_plan", 1.0, None  # no target was set: a profit at the minimum reward-to-risk is not leaving early
         else:
             exit_kind, ladder, mistake = "early_exit", 0.5, "early_exit"
     elif reason == "liquidation":
@@ -328,7 +330,7 @@ def evaluate_all(trades: list[TradeFacts], cfg: DisciplineConfig) -> list[TradeS
 
     # a trade that went to plan needs no review, so not having one is not a mistake (the person's optional notes are still welcome)
     for s in scores:
-        if not s.facts.reviewed and trade_review.on_plan(s.mistakes, s.facts.stop0, s.facts.target0, s.planned_rr, cfg.min_rr):
+        if not s.facts.reviewed and trade_review.on_plan(s.mistakes, s.facts.stop0, s.facts.target0, s.planned_rr, cfg.min_rr, s.exit_r, s.facts.pnl):
             s.checks = [Check(c.key, c.category, c.emotion, 1.0, None) if c.key == "reviewed" else c for c in s.checks]
     return scores
 

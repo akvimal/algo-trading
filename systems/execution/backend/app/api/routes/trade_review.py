@@ -52,7 +52,8 @@ def suggestions(kind: Literal["position", "group"], trade_id: str, user: User = 
     if mine is None:
         return none
     verdict = tr.override_verdict(mine.facts.entry_context, mine.facts.stop0, mine.facts.target0, mine.planned_rr, mine.exit_r, mine.facts.pnl, cfg.min_rr)
-    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context, verdict)}
+    won = tr.won_at_min_rr(mine.facts.pnl, mine.exit_r, cfg.min_rr)
+    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context, verdict, won)}
 
 
 @router.get("/trade-review/on-plan")
@@ -96,10 +97,14 @@ def sessions(limit: int = 10, user: User = Depends(get_current_user), db: Sessio
         cfg = op.segment_config(db, user.id, seg)
         scores = dv2.evaluate_all(seg_facts, cfg)
         facts += op.cleared(seg_facts, op.on_plan_ids(scores, cfg))  # a trade that went to plan counts as a clean review
-        if any((f.entry_context or {}).get("overridden") for f in seg_facts):
-            for s in scores:
-                if not s.facts.auto_traded:
-                    verdicts[s.facts.id] = tr.override_verdict(s.facts.entry_context, s.facts.stop0, s.facts.target0, s.planned_rr, s.exit_r, s.facts.pnl, cfg.min_rr)
+        for s in scores:
+            if s.facts.auto_traded:
+                continue
+            v = tr.override_verdict(s.facts.entry_context, s.facts.stop0, s.facts.target0, s.planned_rr, s.exit_r, s.facts.pnl, cfg.min_rr)
+            if v is None and tr.won_at_min_rr(s.facts.pnl, s.exit_r, cfg.min_rr):
+                v = sg.WON_AT_MIN
+            if v:
+                verdicts[s.facts.id] = v
     D = db_models.SpreadBotDecision
     failed: dict = {}
     for d in db.query(D).filter(D.user_id == user.id, D.outcome == "failed", D.decided_at >= datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)).all():

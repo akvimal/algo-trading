@@ -29,7 +29,7 @@ def on_plan_ids(scores: list[dv2.TradeScore], cfg: dv2.DisciplineConfig) -> set[
     """The ids of the person's own trades, with no review of their own, that went to plan."""
     return {
         s.facts.id for s in scores
-        if not s.facts.auto_traded and not s.facts.root_cause and tr.on_plan(s.mistakes, s.facts.stop0, s.facts.target0, s.planned_rr, cfg.min_rr)
+        if not s.facts.auto_traded and not s.facts.root_cause and tr.on_plan(s.mistakes, s.facts.stop0, s.facts.target0, s.planned_rr, cfg.min_rr, s.exit_r, s.facts.pnl)
     }
 
 

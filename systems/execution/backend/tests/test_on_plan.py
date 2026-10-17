@@ -72,3 +72,53 @@ def test_a_cleared_trade_is_counted_as_reviewed_and_clean_on_the_grid():
     (day,) = sg.manual_sessions(op.cleared([f, owed], ids))
     assert day["trades"] == 2 and day["unreviewed"] == 1
     assert day["study"]["of"] == 1 and day["plan"]["ok"] == 1 and day["trade"]["ok"] == 1
+
+
+# ---- no target set at entry ------------------------------------------------------------------------------------------------
+
+def manual_exit(exit_price, tid="n1", pnl=None, hours=0):
+    f = facts(tid=tid, target=None, reason="manual", pnl=pnl if pnl is not None else (exit_price - 100.0) * 10, hours=hours)
+    f.exit_price = exit_price
+    return f
+
+
+def test_no_target_but_a_profit_at_the_minimum_reward_to_risk_is_on_plan():
+    f = manual_exit(110.0)  # risk 5, gained 10: 2R
+    scores = dv2.evaluate_all([f], CFG)
+    assert "early_exit" not in scores[0].mistakes
+    assert op.on_plan_ids(scores, CFG) == {"n1"}
+
+
+def test_no_target_and_a_profit_under_the_minimum_is_reviewed_and_scored():
+    f = manual_exit(105.0)  # 1R
+    (score,) = dv2.evaluate_all([f], CFG)
+    assert op.on_plan_ids([score], CFG) == set()
+    assert "early_exit" in score.mistakes and "unplanned_reward" in score.mistakes and "no_review" in score.mistakes
+
+
+def test_no_target_and_a_loss_is_reviewed():
+    f = manual_exit(97.0)
+    assert op.on_plan_ids(dv2.evaluate_all([f], CFG), CFG) == set()
+
+
+def test_no_stop_is_never_on_plan():
+    f = manual_exit(130.0)
+    f.stop0 = None
+    assert op.on_plan_ids(dv2.evaluate_all([f], CFG), CFG) == set()
+
+
+# ---- against the trend ------------------------------------------------------------------------------------------------------
+
+def test_winning_at_the_minimum_reward_to_risk_clears_against_the_trend_override_or_not():
+    ctx = {"regime": "trending_down"}
+    assert [t["tag"] for t in tr.suggest("BUY", [], ctx)["tags"]] == ["against_trend"]
+    assert tr.suggest("BUY", [], ctx, None, True)["tags"] == []
+    assert tr.won_at_min_rr(500, 2.0, 2.0) and not tr.won_at_min_rr(500, 1.5, 2.0) and not tr.won_at_min_rr(-5, 2.0, 2.0)
+
+
+def test_the_grid_does_not_count_against_the_trend_against_a_trade_that_won_at_the_minimum():
+    f = facts(root_cause="study", mistake_tags=["against_trend"])
+    (day,) = sg.manual_sessions([f], verdicts={"t1": sg.WON_AT_MIN})
+    assert day["study"]["ok"] == 1 and day["overrides"] == 0
+    (plain,) = sg.manual_sessions([f])
+    assert plain["study"]["ok"] == 0

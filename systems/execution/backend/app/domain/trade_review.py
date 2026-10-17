@@ -134,20 +134,36 @@ def override_verdict(entry_context: Optional[dict], stop0, target0, planned_rr: 
 ON_PLAN_IGNORED = frozenset({"no_review", "untagged"})
 
 
-def on_plan(mistakes: list[str], stop0, target0, planned_rr: Optional[float], min_rr: float) -> bool:
-    """Whether a closed trade went to plan: a stop and a target at order time, reward-to-risk at the minimum, and no mistake found in how it was sized,
-    entered, managed or exited. Win or lose: a stop-out of a sound plan is the plan working. Such a trade is cleared without a review (notes stay optional)."""
-    if stop0 is None or target0 is None or planned_rr is None or planned_rr + _RR_TOL < min_rr:
+def won_at_min_rr(pnl, exit_r: Optional[float], min_rr: float) -> bool:
+    """The trade made money and made at least the minimum reward-to-risk (measured on what it actually returned)."""
+    return (pnl or 0) > 0 and exit_r is not None and exit_r + _RR_TOL >= min_rr
+
+
+def on_plan(mistakes: list[str], stop0, target0, planned_rr: Optional[float], min_rr: float, exit_r: Optional[float] = None, pnl=None) -> bool:
+    """Whether a closed trade went to plan and so needs no review. It needs a stop at order time and either
+      - a target too, at the minimum reward-to-risk, and no mistake found in how it was sized, entered, managed or exited (win or lose: a stop-out of a
+        sound plan is the plan working), or
+      - no target, but it closed in profit at the minimum reward-to-risk or better: the plan was thin, the result is what the plan asks for.
+    A profit below the minimum with no target is not on plan: it is reviewed and scored."""
+    if stop0 is None:
         return False
-    return not [m for m in mistakes if m not in ON_PLAN_IGNORED]
+    ignored = ON_PLAN_IGNORED
+    if target0 is None:
+        if not won_at_min_rr(pnl, exit_r, min_rr):
+            return False
+        ignored = ON_PLAN_IGNORED | {"unplanned_reward"}
+    elif planned_rr is None or planned_rr + _RR_TOL < min_rr:
+        return False
+    return not [m for m in mistakes if m not in ignored]
 
 
-def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional[dict], override: Optional[str] = None) -> dict:
+def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional[dict], override: Optional[str] = None, won_at_min: bool = False) -> dict:
     """The tags the data supports for one trade, each with its level and why, and the root cause they imply. Study first, as in the chain.
     `override` is override_verdict's answer: an override that paid off clears 'against the trend', one that was neither a clear win nor a plan
-    failure is left to the person, the others are suggested with the override as the reason."""
+    failure is left to the person, the others are suggested with the override as the reason. `won_at_min` (the trade made money at the minimum
+    reward-to-risk) clears it too, override or not: going against the system's read is fine when it pays what the plan asks."""
     found: dict[str, str] = {}
-    if against_trend(action, entry_context) and override not in ("paid_off", "small_win"):
+    if against_trend(action, entry_context) and override not in ("paid_off", "small_win") and not won_at_min:
         found["against_trend"] = "The market was trending the other way at entry" + (f" (ADX {entry_context['adx']:.0f})." if isinstance(entry_context.get("adx"), (int, float)) else ".")
         if override in ("lost", "weak_plan"):
             found["against_trend"] += " " + OVERRIDE_WHY[override]

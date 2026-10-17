@@ -20,6 +20,7 @@ from app.domain.performance import day_key
 from app.domain.trade_review import LEVELS, TAG_LEVEL
 
 SESSIONS = 10
+WON_AT_MIN = "won_at_min_rr"  # a verdict for a trade that made money at the minimum reward-to-risk: not an override, but it clears "against the trend" too
 # The execution level is called "Trade" on the grid: did the person follow the plan once in the trade.
 GRID_LEVELS = {"study": "study", "plan": "plan", "execution": "trade"}
 
@@ -48,7 +49,7 @@ def _failed_level(f: TradeFacts, level: str, verdicts: dict[str, Optional[str]])
     for tag in f.mistake_tags or []:
         if TAG_LEVEL.get(tag) != level:
             continue
-        if tag == "against_trend" and verdicts.get(f.id) == "paid_off":
+        if tag == "against_trend" and verdicts.get(f.id) in ("paid_off", WON_AT_MIN):
             continue
         return True
     return False
@@ -70,7 +71,7 @@ def manual_sessions(facts: Iterable[TradeFacts], limit: int = SESSIONS, verdicts
             ok = sum(1 for f in reviewed if not _failed_level(f, level, verdicts))
             rate = ok / len(reviewed)
             cells[GRID_LEVELS[level]] = {"ok": ok, "of": len(reviewed), "rate": round(rate, 3), "band": band(rate)}
-        overridden = [f for f in rows if verdicts.get(f.id)]
+        overridden = [f for f in rows if verdicts.get(f.id) not in (None, WON_AT_MIN)]
         out.append({
             "date": day.isoformat(), "trades": len(rows), "unreviewed": len(rows) - len(reviewed), **cells,
             "overrides": len(overridden), "paid_off": sum(1 for f in overridden if verdicts.get(f.id) == "paid_off"),

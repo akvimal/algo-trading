@@ -152,6 +152,7 @@ def build_rules_brief(segment: str) -> dict:
         "ai_reused": False,
         "ai_read_at": None,
         "ai_basis": None,
+        "ai_deferred": False,
         "model": None,
         "bias": rules["bias"],
         "agree": None,
@@ -190,6 +191,11 @@ def add_ai(segment: str, brief: dict, api_key: Optional[str], prior: Optional[di
     return out
 
 
+def rules_only_brief(segment: str) -> dict:
+    """The rule-based brief with the AI read left for the person to ask for (`ai_deferred`): what a page gets while AI_ON_LOAD is off."""
+    return {**build_rules_brief(segment), "ai_deferred": True}
+
+
 def build_brief(segment: str, api_key: Optional[str], prior: Optional[dict] = None) -> dict:
     """Both halves, one after the other (a forced refresh waits for the whole thing)."""
     return add_ai(segment, build_rules_brief(segment), api_key, prior)
@@ -211,7 +217,10 @@ def _upgrade_in_background(segment: str, base: Optional[dict], api_key: Optional
 
     def work() -> None:
         try:
-            _store(segment, add_ai(segment, base, api_key, prior) if base is not None else build_brief(segment, api_key, prior))
+            if base is not None:
+                _store(segment, add_ai(segment, base, api_key, prior))
+            else:
+                _store(segment, build_brief(segment, api_key, prior) if settings.ai_on_load else rules_only_brief(segment))
         except Exception:
             logger.exception("segment brief %s: background build failed", segment)
             if base is not None:  # never leave the viewer polling for an AI read that is not coming
@@ -246,6 +255,11 @@ def get_brief(segment: str, api_key: Optional[str], force: bool = False) -> dict
             if now - hit[0] >= CACHE_SECONDS and segment not in _upgrading and _session_open(segment):
                 _upgrade_in_background(segment, None, api_key, prior)
             return hit[1]
+        elif not settings.ai_on_load:
+            # No AI by itself: the rules' read now, and the model only when the person presses Refresh.
+            base = rules_only_brief(segment)
+            _store(segment, base)
+            return base
         else:
             base = build_rules_brief(segment)
             base["ai_pending"] = True

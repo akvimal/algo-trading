@@ -256,6 +256,8 @@ export type PremarketReport = {
   /** While ai_pending: when the model was asked, and which model is reading. */
   ai_requested_at?: string | null;
   ai_model?: string | null;
+  /** The AI read was not asked for on load (the server's AI_ON_LOAD is off): the rule-based read shows, and Refresh runs the model. */
+  ai_deferred?: boolean;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";

@@ -1051,4 +1051,6 @@ class PremarketReportOut(BaseModel):
     ai_reused: bool = False
     # While ai_pending: when the model was asked and which model it is, so the page can show the read in progress.
     ai_requested_at: Optional[datetime] = None
+    # The AI read was not asked for on load (AI_ON_LOAD is off): the rule-based read is shown, and Refresh runs the model.
+    ai_deferred: bool = False
     ai_model: Optional[str] = None

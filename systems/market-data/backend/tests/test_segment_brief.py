@@ -201,3 +201,44 @@ def test_nse_pulse_input_without_a_live_price_is_a_failed_input_not_an_exception
     monkeypatch.setattr(provider.requests, "get", lambda *a, **k: Resp())
     got = provider._fetch_yahoo_quote("sec_fin", "Nifty Financial Services", "sector", "^CNXFIN")
     assert not got.ok and "no live price" in got.error
+
+
+# ---- AI_ON_LOAD off: nothing asks the model by itself
+
+def _quiet(monkeypatch, segment):
+    from app.config import settings
+
+    segment_brief._cache.pop(segment, None)
+    segment_brief._last_refresh.pop(segment, None)
+    monkeypatch.setattr(settings, "ai_on_load", False)
+    monkeypatch.setattr(provider, "fetch_inputs", lambda seg: [RawInput(key="gold", label="Gold", group="metals", ok=True, change=1.0, value=2000.0)])
+    asked = []
+    monkeypatch.setattr(segment_brief, "run_ai", lambda *a, **k: asked.append(a) or {"bias": "bullish", "confidence": 60, "one_liner": "x", "reasons": [], "risks": [], "watch": "", "macro_context": "", "model": "m"})
+    return asked
+
+
+def test_with_ai_on_load_off_a_cold_request_gets_the_rules_read_and_never_asks_the_model(monkeypatch):
+    asked = _quiet(monkeypatch, "MCX")
+    brief = segment_brief.get_brief("MCX", "key")
+    assert brief["ai_deferred"] is True and brief["ai_pending"] is False and brief["ai"] is None and brief["bias"] == brief["rules"]["bias"]
+    time.sleep(0.2)
+    assert asked == []  # no background upgrade either
+    assert segment_brief.get_brief("MCX", "key")["ai_deferred"] is True  # and the next request is the cached one
+
+
+def test_with_ai_on_load_off_a_forced_refresh_still_runs_the_model(monkeypatch):
+    asked = _quiet(monkeypatch, "MCX")
+    brief = segment_brief.get_brief("MCX", "key", force=True)
+    assert len(asked) == 1 and brief["ai"]["bias"] == "bullish" and brief.get("ai_deferred") is False
+
+
+def test_with_ai_on_load_off_a_stale_brief_is_rebuilt_without_the_model(monkeypatch):
+    asked = _quiet(monkeypatch, "MCX")
+    segment_brief.get_brief("MCX", "key")
+    stamp, hit = segment_brief._cache["MCX"]
+    segment_brief._cache["MCX"] = (stamp - segment_brief.CACHE_SECONDS - 5, hit)
+    monkeypatch.setattr(segment_brief, "_session_open", lambda seg, now=None: True)
+    segment_brief.get_brief("MCX", "key")
+    time.sleep(0.3)
+    assert asked == []
+    assert segment_brief._cache["MCX"][1]["ai_deferred"] is True

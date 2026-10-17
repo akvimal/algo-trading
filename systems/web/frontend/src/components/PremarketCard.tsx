@@ -69,6 +69,11 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
         </div>
       )}
       {data?.ai_pending && <AiProgress report={data} />}
+      {data?.ai_deferred && !data.ai_pending && !busy && (
+        <div className="notice" data-testid="ai-deferred">
+          Showing the rule-based read. The AI read is not run on load here: <button className="link-btn" onClick={() => void refresh()}>Run AI read</button>
+        </div>
+      )}
       {!report.loading && !report.error && !data && (
         <div className="card">
           <p className="dim" style={{ margin: 0 }}>

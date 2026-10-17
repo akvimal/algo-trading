@@ -199,6 +199,9 @@ class Settings(BaseSettings):
     # Model for the on-demand OI-strip AI read (GET /ai-read), separate from the
     # news digest's cheap one since it only runs when the user clicks.
     openrouter_read_model: str = "openai/gpt-6-luna-pro"
+    # Whether the MCX / crypto / NSE-pulse briefs ask the model for their AI read by themselves (when a page opens on a cold cache, which is every restart).
+    # Off, the brief shows its rule-based read at once and the AI read waits for the person's Refresh (so a rebuilt dev stack spends nothing).
+    ai_on_load: bool = True
 
     # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
     # see docs/architecture.md) - the shared quote cache + pub/sub channel

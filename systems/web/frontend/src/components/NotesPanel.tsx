@@ -16,8 +16,6 @@ import { CopyIcon, DownloadIcon, ListIcon } from "../chart/icons";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
 import { NoteRow } from "./NoteRow";
-import { NoteTrade } from "./NoteTrade";
-import { useNoteTrades } from "../hooks/useNoteTrades";
 import { NOTE_MAX, NOTE_TAGS, groupByDay } from "./notesModel";
 
 /** How many of the latest notes on the instrument are shown under the chart. */
@@ -93,7 +91,6 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
   const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
   const list = notes.data ?? [];
-  const trades = useNoteTrades(list);
   const threadEnd = useRef<HTMLDivElement>(null);
 
   // A different instrument is a different thread (and a different half-written note).
@@ -241,7 +238,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
               <div key={g.label}>
                 {g.label !== "Today" && <div className="notes-day">{g.label}</div>}
                 {g.notes.map((n) => (
-                  <NoteRow key={n.id} note={n} onDeleted={notes.reload} extra={<NoteTrade note={n} trade={trades.byId[n.id]} onChanged={trades.reload} />} />
+                  <NoteRow key={n.id} note={n} onDeleted={notes.reload} />
                 ))}
               </div>
             ))}

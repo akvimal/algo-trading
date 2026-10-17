@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { LiveEligibility, Requirement } from "../api/types";
 import { READINESS_HELP, READINESS_TITLE } from "../pages/learnCatalog";
-import { meterFill, meterTone, nextCheck, type MeterTone } from "../pages/learnModel";
+import { meterFill, meterTone, nextCheck, progressNote, type MeterTone } from "../pages/learnModel";
 import { graduation } from "../pages/portfolioModel";
 import { DisciplineGauge } from "./DisciplineGauge";
 
@@ -79,6 +79,9 @@ function Graphic({ r }: { r: Requirement }) {
 function Tile({ r }: { r: Requirement }) {
   const tone = meterTone(r);
   const help = READINESS_HELP[r.key];
+  const note = r.key === "profit" ? null : progressNote(r);
+  // Days are capped at the target: the blocks show 14 of 14, the surplus is said in words.
+  const capped = r.key === "days" && r.value != null && r.target != null && r.value > r.target;
   return (
     <div className="card" data-testid="requirement" data-met={r.met ? "true" : "false"} style={{ margin: 0 }}>
       <div className="row">
@@ -87,9 +90,11 @@ function Tile({ r }: { r: Requirement }) {
       </div>
       <Graphic r={r} />
       <div className="row" style={{ marginTop: 4 }}>
-        <span className="num" style={{ fontSize: 13 }}>{r.actual}</span>
-        <span className="faint" style={{ fontSize: 12 }}>{r.required}</span>
+        <span className="num" style={{ fontSize: 13 }}>{capped ? `${r.target} of ${r.target} days` : r.actual}</span>
+        <span className="faint" style={{ fontSize: 12 }}>{capped ? `${r.actual} on record` : r.required}</span>
       </div>
+      {r.note && <div className="dim" style={{ fontSize: 12, marginTop: 4 }} data-testid="requirement-note">{r.note}</div>}
+      {note && !capped && <div className="faint" style={{ fontSize: 12, marginTop: 2 }} data-testid="progress-note">{note}</div>}
       {!r.met && help && (
         <details style={{ marginTop: 6 }}>
           <summary className="dim" style={{ fontSize: 13, cursor: "pointer" }}>What this means</summary>

@@ -426,6 +426,7 @@ class RequirementOut(BaseModel):
     value: Optional[float] = None
     target: Optional[float] = None
     higher_is_better: bool = True
+    note: Optional[str] = None
 
 
 class LiveEligibilityOut(BaseModel):

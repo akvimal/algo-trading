@@ -41,6 +41,13 @@ def test_a_record_meeting_everything_is_eligible():
     assert all(r.met for r in ev())
 
 
+def test_trades_closed_without_costs_are_explained_not_silently_dropped():
+    assert by_key(ev())["trades"].note is None
+    one = by_key(ev(qualifying_trades=0, uncounted_trades=1))["trades"]
+    assert one.met is False and "1 closed trade was closed without costs" in one.note
+    assert "5 closed trades were closed without costs" in by_key(ev(uncounted_trades=5))["trades"].note
+
+
 def test_every_requirement_also_carries_its_numbers_for_a_meter():
     r = by_key(ev())
     assert (r["trades"].value, r["trades"].target) == (40.0, 30.0)

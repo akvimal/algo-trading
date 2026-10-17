@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { NextStep } from "../components/nav";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
 import { listWaitingOrders } from "../api/trade";
@@ -125,7 +126,7 @@ export function TodayPage() {
         <Empty title="Nothing open here">
           {positions.length + groups.length === 0 ? (
             <>
-              Your trades will show up here once you place one. <Link to="/trade">Place your first trade</Link>
+              Your trades will show up here once you place one. <NextStep to="/trade">Place your first trade</NextStep>
             </>
           ) : (
             "No open trades in this view."

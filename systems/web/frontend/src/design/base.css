@@ -3093,3 +3093,48 @@ table.t th {
     padding: 16px;
   }
 }
+
+/* Links: a next-step button, a whole-row link with a chevron, a back link, and underlined inline links. */
+.next-step {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.link-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--tap);
+  padding: 8px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.link-row + .link-row {
+  border-top: 1px solid var(--border);
+}
+.link-row-hint {
+  display: block;
+  font-size: 13px;
+}
+.link-row-chevron {
+  color: var(--text-dim, var(--accent));
+  font-size: 20px;
+}
+.link-row:hover .link-row-chevron {
+  color: var(--accent);
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--tap);
+  padding-right: 12px;
+  text-decoration: none;
+  font-weight: 600;
+}
+p a:not(.btn):not(.link-row):not(.back-link),
+li a:not(.btn) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

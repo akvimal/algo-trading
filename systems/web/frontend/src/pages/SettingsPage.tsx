@@ -1,4 +1,5 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { BackLink } from "../components/nav";
 import { getAccounts, getCredentials } from "../api/settings";
 import type { Book, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
@@ -37,9 +38,7 @@ export function SettingsPage() {
 
   return (
     <div className="stack">
-      <p style={{ margin: 0 }}>
-        <Link to="/more">← More</Link>
-      </p>
+      <BackLink to="/more" />
       <h1>Settings</h1>
       <div className="chips" role="tablist" aria-label="Settings sections">
         {TABS.map((t) => (

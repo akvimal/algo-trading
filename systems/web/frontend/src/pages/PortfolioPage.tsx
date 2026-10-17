@@ -1,4 +1,5 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { LinkRow } from "../components/nav";
 import { api } from "../api/http";
 import type { Book, DisciplineV2, EquityHistory, LiveEligibility, MistakeSummary, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
@@ -96,13 +97,11 @@ function BookPage({ view }: { view: View }) {
   return (
     <div className="stack">
       <h1>{view === "portfolio" ? "Portfolio" : "Performance"}</h1>
-      <p className="dim" style={{ margin: 0 }}>
-        {view === "portfolio" ? (
-          <>What you hold and what you have traded. <Link to={`/performance?segment=${segment}`}>How you are doing →</Link></>
-        ) : (
-          <>How you are doing: results, discipline and what to review. <Link to={`/portfolio?segment=${segment}`}>Positions and history →</Link></>
-        )}
-      </p>
+      {view === "portfolio" ? (
+        <LinkRow to={`/performance?segment=${segment}`} title="How you are doing" hint="Results, discipline and what to review" />
+      ) : (
+        <LinkRow to={`/portfolio?segment=${segment}`} title="Positions and history" hint="What you hold and what you have traded" />
+      )}
       <div className="chips" role="group" aria-label="Account">
         {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
           <button key={s} aria-pressed={segment === s} onClick={() => set({ segment: s })}>

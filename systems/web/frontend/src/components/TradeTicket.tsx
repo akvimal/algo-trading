@@ -1,4 +1,5 @@
 import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
+import { NextStep } from "./nav";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -689,8 +690,8 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <p style={{ margin: "4px 0 0" }}>{result.message}</p>
           {result.warning && <p style={{ margin: "4px 0 0", color: "var(--warn)" }}>{result.warning}</p>}
           {result.ok && result.kind !== "pending" && (
-            <p style={{ margin: "6px 0 0" }}>
-              <Link to="/portfolio?tab=positions">See it in Portfolio</Link>
+            <p style={{ margin: "8px 0 0" }}>
+              <NextStep to="/portfolio?tab=positions">See it in Portfolio</NextStep>
             </p>
           )}
         </div>

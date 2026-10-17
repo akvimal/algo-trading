@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LinkRow } from "./nav";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
 import type { DisciplineV2, EquityHistory, Performance, Segment } from "../api/types";
@@ -107,9 +108,7 @@ export function PerformanceSnapshot({ markets }: { markets: Segment[] }) {
             )}
           </div>
         )}
-        <p style={{ margin: "12px 0 0" }}>
-          <Link to={`/performance?segment=${segment}&tab=review`}>See the full breakdown →</Link>
-        </p>
+        <LinkRow to={`/performance?segment=${segment}&tab=review`} title="See the full breakdown" hint="Results, discipline and the review of your trades" />
       </div>
     </>
   );

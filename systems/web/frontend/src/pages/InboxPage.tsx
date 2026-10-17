@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { BackLink } from "../components/nav";
+import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { dismissItem, getInbox, markAllRead, markRead, markUnread, type InboxItem } from "../api/inbox";
 import { Empty, ErrorNotice, Skeleton } from "../components/bits";
@@ -39,9 +40,7 @@ export function InboxPage() {
 
   return (
     <div className="stack">
-      <p style={{ margin: 0 }}>
-        <Link to="/more">← More</Link>
-      </p>
+      <BackLink to="/more" />
       <h1>Inbox</h1>
       <p className="dim" style={{ margin: 0 }}>
         Warnings, alerts and things to do, in one place. To-dos clear themselves when you have dealt with them.

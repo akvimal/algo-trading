@@ -1,4 +1,5 @@
 import { Link, useSearchParams } from "react-router-dom";
+import { NextStep } from "../components/nav";
 import { api } from "../api/http";
 import type { LiveEligibility, MistakeSummary, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
@@ -75,7 +76,7 @@ function HabitList({ summary, segment }: { summary: MistakeSummary; segment: Seg
         <div className="card" data-testid="review-first">
           <strong>{summary.pending} closed trade{summary.pending === 1 ? " is" : "s are"} not reviewed yet.</strong>{" "}
           <span className="dim">This list is only as accurate as your reviews.</span>{" "}
-          <Link to={`/performance?segment=${segment}&tab=review`}>Review now</Link>
+          <NextStep to={`/performance?segment=${segment}&tab=review`}>Review now</NextStep>
         </div>
       )}
       {rows.length === 0 ? (

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LinkRow } from "../components/nav";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import type { Segment } from "../api/types";
@@ -132,104 +133,32 @@ export function MorePage() {
         </div>
       )}
       <div className="card">
-        <Link to="/performance" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Performance</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Equity, results, discipline and the review of your closed trades
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/performance" title="Performance" hint="Equity, results, discipline and the review of your closed trades" />
       </div>
       <div className="card">
-        <Link to="/learn" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Learn</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Are you ready for live trading, which habit to fix next, and the path from the basics
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/learn" title="Learn" hint="Are you ready for live trading, which habit to fix next, and the path from the basics" />
       </div>
       <div className="card">
-        <Link to="/more/settings" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Settings</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Risk limits, your Dhan connection and live trading
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/more/settings" title="Settings" hint="Risk limits, your Dhan connection and live trading" />
       </div>
       <div className="card">
-        <Link to="/more/alerts" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Price alerts</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/more/alerts" title="Price alerts" hint="Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed" />
       </div>
       <div className="card">
-        <Link to="/more/notes" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Notes</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Your thoughts and plans on each instrument, with snapshots
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/more/notes" title="Notes" hint="Your thoughts and plans on each instrument, with snapshots" />
       </div>
       <div className="card">
-        <Link to="/more/swing-shadow" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Swing shadow</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              A paper log of what a 1-3 day open-interest swing bot would have done each night, and how it turned out
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
-        <Link to="/more/strategies" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-          <span>
-            <strong>Strategies</strong>
-            <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              Rules, indicators, watchlists and signals for webhook and in-house strategies
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </Link>
+        <LinkRow to="/more/swing-shadow" title="Swing shadow" hint="A paper log of what a 1-3 day open-interest swing bot would have done each night, and how it turned out" />
+        <LinkRow to="/more/strategies" title="Strategies" hint="Rules, indicators, watchlists and signals for webhook and in-house strategies" />
       </div>
       {session?.isAdmin && (
         <div className="card">
-          <Link to="/more/ai-models" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-            <span>
-              <strong>AI models</strong>
-              <span className="dim" style={{ display: "block", fontSize: 13 }}>
-                Which model runs the news digest, the pre-market bias and the OI read: the same for all, or one each
-              </span>
-            </span>
-            <span aria-hidden="true">›</span>
-          </Link>
+          <LinkRow to="/more/ai-models" title="AI models" hint="Which model runs the news digest, the pre-market bias and the OI read: the same for all, or one each" />
         </div>
       )}
       {session?.isAdmin && (
         <div className="card">
-          <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
-            <span>
-              <strong>Background jobs</strong>
-              <span className="dim" style={{ display: "block", fontSize: 13 }}>
-                The nightly snapshots and other scheduled jobs: running now, last run, next run
-              </span>
-            </span>
-            <span aria-hidden="true">›</span>
-          </Link>
+          <LinkRow to="/more/jobs" title="Background jobs" hint="The nightly snapshots and other scheduled jobs: running now, last run, next run" />
         </div>
       )}
     </div>

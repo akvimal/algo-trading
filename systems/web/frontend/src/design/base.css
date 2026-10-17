@@ -3208,3 +3208,21 @@ li a:not(.btn) {
   gap: 12px;
   padding: 0 4px;
 }
+
+/* Last-sessions grids on Home: sessions across, a row per question, a coloured cell per answer. */
+.sgrid-table { display: grid; gap: 4px; align-items: center; }
+.sgrid-row { display: contents; }
+.sgrid-head { display: flex; flex-direction: column; align-items: center; font-size: 11px; line-height: 1.2; }
+.sgrid-head strong { font-size: 13px; }
+.sgrid-label { font-size: 13px; }
+.sgrid-cell { display: block; height: 30px; min-width: 0; border-radius: 4px; background: var(--surface-2); }
+.sgrid-cell.good { background: var(--up); }
+.sgrid-cell.mid { background: var(--warn); }
+.sgrid-cell.poor { background: var(--dn); }
+.sgrid-cell.none { background: var(--surface-2); border: 1px solid var(--border); }
+.sgrid-cell.hatched { background-image: repeating-linear-gradient(45deg, transparent 0 4px, var(--border) 4px 5px); }
+.sgrid-foot { display: flex; justify-content: center; min-height: 22px; }
+.sgrid-foot .pill { text-decoration: none; font-size: 11px; padding: 1px 6px; }
+.sgrid-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; }
+.sgrid-key { display: inline-flex; align-items: center; gap: 6px; }
+.sgrid-key .sgrid-cell { display: inline-block; width: 18px; height: 14px; }

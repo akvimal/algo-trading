@@ -2,6 +2,7 @@
 Saving the person's confirmed tags goes through the existing PUT /positions/{id}/tags and /option-groups/{id}/tags."""
 
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,9 +12,10 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
 from app.domain import discipline_v2 as dv2
+from app.domain import session_grid as sg
 from app.domain import trade_review as tr
 from app.domain.discipline_load import load_trade_facts
-from app.domain.performance import epoch_start
+from app.domain.performance import day_key, epoch_start
 
 router = APIRouter()
 
@@ -63,3 +65,20 @@ def summary(segment: str, scope: Literal["epoch", "all"] = "epoch", user: User =
     facts = [f for f in load_trade_facts(db, user.id, seg, since) if not f.auto_traded]
     out = tr.summarize([{"exit_time": f.exit_time, "pnl": f.pnl, "root_cause": f.root_cause, "tags": f.mistake_tags} for f in facts])
     return {"segment": seg, "scope": scope, **out}
+
+
+@router.get("/trade-review/sessions")
+def sessions(limit: int = 10, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The last `limit` trading sessions as two grids (app/domain/session_grid.py): the person's own trades judged on Study / Plan / Trade from their reviews,
+    and the bots' trades judged on result, wins and a clean run. Every market together; a session with no closed trade is skipped."""
+    limit = max(1, min(limit, 30))
+    since = date.today() - timedelta(days=75)  # ten sessions fit comfortably; older history is not read
+    facts = [f for seg in ("NSE", "MCX", "CRYPTO") for f in load_trade_facts(db, user.id, seg, since)]
+    D = db_models.SpreadBotDecision
+    failed: dict = {}
+    for d in db.query(D).filter(D.user_id == user.id, D.outcome == "failed", D.decided_at >= datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)).all():
+        failed[day_key(d.decided_at)] = failed.get(day_key(d.decided_at), 0) + 1
+    return {
+        "manual": sg.manual_sessions([f for f in facts if not f.auto_traded], limit),
+        "bot": sg.bot_sessions([f for f in facts if f.auto_traded], failed, limit),
+    }

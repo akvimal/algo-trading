@@ -756,3 +756,12 @@ export type ZoneScanRow = {
   oi_agrees: boolean | null;
 };
 export type ZoneScan = { snapshot_date: string | null; rows: ZoneScanRow[] };
+
+/** The home page's last-sessions grids (execution's GET /trade-review/sessions). A cell's band is good (above 80%), mid (50 to 80), poor (below 50) or none (nothing to judge). */
+export type GridBand = "good" | "mid" | "poor" | "none";
+export type GridCell = { ok: number; of: number; rate: number | null; band: GridBand };
+export type ManualSession = { date: string; trades: number; unreviewed: number; study: GridCell; plan: GridCell; trade: GridCell };
+export type BotSession = {
+  date: string; trades: number; pnl: number; wins: number; win_rate: number; result: GridBand; wins_band: GridBand; clean: GridBand; no_stop: number; failed: number;
+};
+export type SessionGrids = { manual: ManualSession[]; bot: BotSession[] };

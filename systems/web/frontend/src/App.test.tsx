@@ -159,6 +159,21 @@ describe("Today", () => {
     expect(card.getByRole("link", { name: /2 to review/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=review&section=journal");
   });
 
+  it("shows the last sessions in place of the first-week checklist once there is a session", async () => {
+    const cellOf = (ok: number, of: number) => ({ ok, of, rate: of ? ok / of : null, band: of ? "good" : "none" });
+    mockFetch({
+      "/accounts": () => json([account]),
+      "/option-groups": () => json([]),
+      "/positions": () => json([]),
+      "/options/sentiment": () => json(sentiment),
+      "/trade-review/sessions": () => json({ manual: [{ date: "2026-10-03", trades: 2, unreviewed: 0, study: cellOf(2, 2), plan: cellOf(2, 2), trade: cellOf(2, 2) }], bot: [] }),
+    });
+    renderApp("/");
+    expect(await screen.findByTestId("manual-grid")).toBeInTheDocument();
+    expect(screen.queryByText("Your first week")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bot-grid")).not.toBeInTheDocument(); // no bot trades, no bot grid
+  });
+
   it("squares off only after an explicit confirm", async () => {
     const calls = happy();
     const user = userEvent.setup();

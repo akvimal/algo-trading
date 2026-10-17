@@ -8,6 +8,7 @@ import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { AccountCard } from "../components/AccountCard";
 import { MarketsCard } from "../components/MarketsCard";
+import { hasSessions, SessionGrids, useSessionGrids } from "../components/SessionGrid";
 import { PositionCard } from "../components/PositionCard";
 import { WaitingOrders } from "../components/WaitingOrders";
 import { formatInr, formatPnl } from "../format";
@@ -39,6 +40,7 @@ export function TodayPage() {
   const [mode, setMode] = useState<Mode>("intraday");
   const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
+  const grids = useSessionGrids();
   // Open spot and futures results follow the price socket between polls.
   const live = useLivePositions(today.data?.positions);
 
@@ -103,7 +105,8 @@ export function TodayPage() {
         </aside>
       )}
       <div className="stack today-main">
-      {guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
+      {/* Once there is a session to show, the last sessions replace the first-week checklist. */}
+      {grids.data && hasSessions(grids.data) ? <SessionGrids grids={grids.data} /> : guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
 
       <h2 className="section-title">Open now</h2>
       {shownPositions.length + shownGroups.length === 0 ? (

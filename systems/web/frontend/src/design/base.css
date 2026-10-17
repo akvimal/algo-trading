@@ -3463,3 +3463,90 @@ a.tape-dot {
   display: inline-block;
   text-decoration: none;
 }
+
+/* The ticket in three parts: Study, Plan, Trade. On a phone one of Study/Plan is open at a time; on a wide screen both are. */
+.tstep {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.tstep-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tstep-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tstep-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 13px;
+}
+.tstep-summary {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tstep-chevron {
+  flex: none;
+  transition: transform 0.15s;
+}
+.tstep.open .tstep-chevron {
+  transform: rotate(180deg);
+}
+.tstep-body {
+  padding-bottom: 4px;
+}
+.tstep-next {
+  display: none;
+  margin-top: 4px;
+}
+.tstep-trade {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+@media (max-width: 720px) {
+  .tstep:not(.open) .tstep-body {
+    display: none;
+  }
+  .tstep-next {
+    display: inline-flex;
+  }
+}
+@media (min-width: 721px) {
+  .tstep-head {
+    cursor: default;
+  }
+  .tstep-chevron {
+    display: none;
+  }
+}

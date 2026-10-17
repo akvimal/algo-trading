@@ -398,7 +398,7 @@ describe("the page", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    const checks = within(await t.findByTestId("plan-block"));
+    const checks = within(await t.findByTestId("step-study")); // the market read is part of Study
     await waitFor(() => expect(checks.getByText("Regime: trending up")).toBeInTheDocument());
     expect(checks.getByText("You are trading with the trend.")).toBeInTheDocument();
     expect(checks.queryByText(/in favour/)).not.toBeInTheDocument(); // no tally
@@ -409,6 +409,58 @@ describe("the page", () => {
     await user.type(t.getByLabelText("Target"), "970");
     expect(await checks.findByText("You are trading against the trend.")).toBeInTheDocument();
     expect(checks.queryByRole("img", { name: "Against" })).not.toBeInTheDocument(); // the market read is information, never a verdict
+  });
+});
+
+describe("the ticket in three parts", () => {
+  beforeEach(() => screenIs(true));
+
+  it("puts side above Study, Plan and Trade, with the right fields in each", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const study = within(t.getByTestId("step-study"));
+    const plan = within(t.getByTestId("step-plan"));
+    expect(t.getByRole("group", { name: "Side" }).compareDocumentPosition(t.getByTestId("step-study")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(t.getByTestId("step-study").compareDocumentPosition(t.getByTestId("step-plan")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(t.getByTestId("step-plan").compareDocumentPosition(t.getByTestId("step-trade")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Study: what the market is doing and what the trade is, then why
+    expect(study.getByRole("group", { name: "Market state" })).toBeInTheDocument();
+    expect(study.getByRole("group", { name: "Plan" })).toBeInTheDocument();
+    expect(study.getByTestId("ticket-notes")).toBeInTheDocument();
+    // Plan: how it is entered and where it is wrong
+    expect(plan.getByRole("group", { name: "Order type" })).toBeInTheDocument();
+    expect(plan.getByLabelText("Stop-loss")).toBeInTheDocument();
+    expect(plan.getByLabelText("Target")).toBeInTheDocument();
+    expect(plan.getByTestId("plan-chip")).toBeInTheDocument();
+    expect(plan.queryByRole("group", { name: "Market state" })).not.toBeInTheDocument();
+    // Trade: the order as it will go, and the button
+    expect(within(t.getByTestId("step-trade")).getByText(/Buy RELIANCE/)).toBeInTheDocument();
+    expect(t.getByRole("button", { name: /Buy RELIANCE/ })).toBeInTheDocument();
+  });
+
+  it("says in each step's header what is in it, and folds one step at a time (the fold itself is CSS, so every field stays on the page)", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const study = within(t.getByTestId("step-study"));
+    const plan = within(t.getByTestId("step-plan"));
+    expect(study.getByRole("button", { name: /Study/ })).toHaveAttribute("aria-expanded", "true");
+    expect(plan.getByRole("button", { name: /Plan/, expanded: false })).toBeInTheDocument();
+    await user.click(study.getByRole("button", { name: "Next: Plan ›" }));
+    expect(plan.getByRole("button", { name: /Plan/ })).toHaveAttribute("aria-expanded", "true");
+    expect(study.getByRole("button", { name: /Study/ })).toHaveAttribute("aria-expanded", "false");
+    await user.click(study.getByRole("button", { name: /Study/ }));
+    expect(study.getByRole("button", { name: /Study/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows the plan's risk in the Plan header and the setup in Study's once they are known", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await waitFor(() => expect(within(t.getByTestId("step-plan")).getByRole("button", { name: /Plan/ })).toHaveTextContent(/Planned/));
+    expect(within(t.getByTestId("step-study")).getByRole("button", { name: /Study/ })).toHaveTextContent(/Trending/);
   });
 });
 
@@ -884,11 +936,11 @@ describe("the plan on the ticket", () => {
     expect(block.getByText("Your daily loss limit is already reached.")).toBeInTheDocument();
   });
 
-  it("keeps the market read under a collapsed heading, as information that is never scored", async () => {
+  it("keeps the market read under a collapsed heading in Study, as information that is never scored", async () => {
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(within(t.getByTestId("plan-block")).getByText("Regime: trending up")).toBeInTheDocument());
-    const details = within(t.getByTestId("plan-block")).getByText("Market read").closest("details")!;
+    await waitFor(() => expect(within(t.getByTestId("step-study")).getByText("Regime: trending up")).toBeInTheDocument());
+    const details = within(t.getByTestId("step-study")).getByText("Market read").closest("details")!;
     expect(details).not.toHaveAttribute("open");
     expect(within(details).getByText(/not scored and never blocks an order/)).toBeInTheDocument();
   });

@@ -1,4 +1,3 @@
-import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { NextStep } from "./nav";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
@@ -90,6 +89,25 @@ type Props = {
   capturePlan?: (levels: { entry: number | null; stop: number | null; target: number | null }) => Promise<string | null>;
 };
 
+type StepTone = "good" | "warn" | "na";
+
+/** One step of the ticket (Study, Plan). A header that says what is in it, and a body. On a phone only the open step's body shows (the rest is
+ * CSS, so nothing leaves the page: every field stays reachable); on a wide screen every body is open and the header is just a label. */
+function TicketStep({ n, title, summary, tone, open, onToggle, children, testId }: { n: number; title: string; summary: string; tone: StepTone; open: boolean; onToggle: () => void; children: React.ReactNode; testId: string }) {
+  return (
+    <section className={`tstep${open ? " open" : ""}`} data-testid={testId}>
+      <button type="button" className="tstep-head" aria-expanded={open} onClick={onToggle}>
+        <span className="tstep-num">{n}</span>
+        <span className="tstep-title">{title}</span>
+        <span className={`mark ${tone}`} aria-hidden="true">{tone === "good" ? "✓" : tone === "warn" ? "!" : "–"}</span>
+        <span className="tstep-summary">{summary}</span>
+        <span className="tstep-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div className="tstep-body">{children}</div>
+    </section>
+  );
+}
+
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
@@ -99,9 +117,8 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [another, setAnother] = useState(false);
-  // The plan picker (market state and plan) is one line until opened; open from the start only where the ticket is a roomy side panel.
-  const roomy = useMediaQuery(WORKSTATION_QUERY);
-  const [planOpen, setPlanOpen] = useState(roomy);
+  // Study and Plan are steps: on a phone one is open at a time (the other folds to its summary); on a wide screen both are open.
+  const [step, setStep] = useState<1 | 2>(1);
   const [cleared, setCleared] = useState<string | null>(null); // what changing the side just took off the form, until the next edit
   useEffect(() => {
     if (!waitingHere) setAnother(false);
@@ -205,6 +222,19 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
   const simplifiedOption = Boolean(hideOptionExtras) && isOption;
+
+  // What each step says when folded: the person's read and setup, the plan's risk and reward, and the order as it will go.
+  const stateWord = state == null ? "No read" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓";
+  const overridden = raw.planState != null && read != null && raw.planState !== read;
+  const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
+  const studySummary = simplifiedOption
+    ? t.setupTag ?? "Not tagged"
+    : [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup", t.confidence != null ? `${t.confidence}/5` : null].filter(Boolean).join(" · ");
+  const studyTone: StepTone = simplifiedOption ? (t.setupTag ? "good" : "na") : planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
+  const planNow = planStatus(t, a, ctx);
+  const planSummary = simplifiedOption ? (limit ? "Waits for a price" : "At the market") : planNow?.text ?? "Set a stop and a target";
+  const planTone: StepTone = simplifiedOption ? "na" : planNow?.tone === "ready" ? "good" : planNow?.tone === "warn" ? "warn" : "na";
+  const tradeSummary = `${ACTION_WORD(t.action)} ${ctx.symbol} · ${limit ? (t.entry.trim() ? `wait at ${t.entry}` : "wait for a price") : "at the market"}${a.riskAmount != null && !simplifiedOption ? ` · risk ${formatInr(a.riskAmount)}` : ""}`;
 
   async function submit() {
     // Re-derive from the current ticket: nothing captured from an earlier render is ever sent.
@@ -345,6 +375,148 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </p>
       )}
 
+      <TicketStep n={1} title="Study" summary={studySummary} tone={studyTone} open={step === 1} onToggle={() => setStep(step === 1 ? 2 : 1)} testId="step-study">
+      {!simplifiedOption && (
+        <>
+        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
+          <div className="plan-icons">
+            {/* What the market is doing (up, down or sideways) and what to do about it (pullback, breakout, reversal): icon buttons, named for
+                screen readers and in the tooltip. */}
+            <div className="chips" role="group" aria-label="Market state">
+              <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
+                <TrendUpIcon />
+              </button>
+              <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
+                <TrendDownIcon />
+              </button>
+              <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
+                <RangingIcon />
+              </button>
+            </div>
+            <div className="chips" role="group" aria-label="Plan">
+              {PLAN_KINDS.map((k) => (
+                <button
+                  key={k.value}
+                  aria-label={k.label}
+                  aria-pressed={raw.planKind === k.value}
+                  disabled={!planAvailable(state, k.value)}
+                  title={!planAvailable(state, k.value) ? "A pullback needs a trend." : k.label}
+                  onClick={() => choosePlan(k.value)}
+                >
+                  {PLAN_ICON[k.value]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
+            {raw.planState != null && read != null && raw.planState !== read ? "Your read. It differs from the system's: it counts as a pass if your plan holds and the trade wins at least 1R." : raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
+          </div>
+          {raw.planKind && (
+            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
+              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
+              {planHint(state, raw.planKind)}
+            </p>
+          )}
+        </div>
+        {/* what the market is doing, as the system reads it: information, never scored */}
+        {marketRead.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary className="faint" style={{ fontSize: 12 }}>
+                Market read
+              </summary>
+              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
+                {marketRead.map((c) => (
+                  <li key={c.key} className="check-item">
+                    <span className="mark info" role="img" aria-label="For information">
+                      ·
+                    </span>
+                    <span>
+                      {c.label}
+                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                        {c.detail}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                Information only: it is not scored and never blocks an order.
+              </p>
+            </details>
+          )}
+        </>
+      )}
+      {/* Kept even in the simplified option ticket, unlike the rest of the journal prompts below
+          it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
+          one place to leave an actual note on WHY, not just how sure, and that's worth keeping
+          even in a quick trade. */}
+      {simplifiedOption && (
+        <label className="select-field" style={{ margin: "12px 0" }}>
+          <span className="dim">Why this trade? (helps your review later)</span>
+          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
+            <option value="">Not tagged</option>
+            {SETUP_TAGS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {(() => {
+        const reasonField = (
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="dim">Reason (optional)</span>
+            <textarea
+              className="textarea"
+              value={t.reason}
+              maxLength={NOTES_MAX}
+              rows={2}
+              onChange={(e) => set("reason", e.target.value)}
+              placeholder="What made you take this trade?"
+            />
+          </label>
+        );
+        if (simplifiedOption) return reasonField;
+        return (
+          <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
+            <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
+              Notes (optional){t.trigger || t.reason.trim() || t.confidence != null ? " ·" : ""}
+              {t.trigger ? ` ${t.trigger}` : ""}
+              {t.confidence != null ? ` · confidence ${t.confidence}` : ""}
+            </summary>
+            <label className="select-field" style={{ margin: "8px 0" }}>
+              <span className="dim">What did you see?</span>
+              <select value={t.trigger ?? ""} onChange={(e) => set("trigger", e.target.value || null)}>
+                <option value="">Not noted</option>
+                {TRIGGERS.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {reasonField}
+            <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
+              Confidence
+            </div>
+            <div className="chips" role="group" aria-label="Confidence">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </details>
+        );
+      })()}
+
+      <button type="button" className="link-btn tstep-next" onClick={() => setStep(2)}>
+        Next: Plan ›
+      </button>
+      </TicketStep>
+
+      <TicketStep n={2} title="Plan" summary={planSummary} tone={planTone} open={step === 2} onToggle={() => setStep(step === 2 ? 1 : 2)} testId="step-plan">
       <div className="ticket-opts">
       {isOption && !hideMoneynessField && (
         <div className="strike-row">
@@ -475,55 +647,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       )}
 
       {!simplifiedOption && (
-        <details className="plan-fold" open={planOpen} onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
-          <summary data-testid="plan-summary">
-            <span className="dim">Plan</span> {state == null ? "none" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓"}
-            {raw.planKind ? ` · ${PLAN_KINDS.find((k) => k.value === raw.planKind)?.label ?? ""}` : " · pick one"}
-          </summary>
-        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
-          <div className="plan-icons">
-            {/* What the market is doing (up, down or sideways) and what to do about it (pullback, breakout, reversal): icon buttons, named for
-                screen readers and in the tooltip. */}
-            <div className="chips" role="group" aria-label="Market state">
-              <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
-                <TrendUpIcon />
-              </button>
-              <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
-                <TrendDownIcon />
-              </button>
-              <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
-                <RangingIcon />
-              </button>
-            </div>
-            <div className="chips" role="group" aria-label="Plan">
-              {PLAN_KINDS.map((k) => (
-                <button
-                  key={k.value}
-                  aria-label={k.label}
-                  aria-pressed={raw.planKind === k.value}
-                  disabled={!planAvailable(state, k.value)}
-                  title={!planAvailable(state, k.value) ? "A pullback needs a trend." : k.label}
-                  onClick={() => choosePlan(k.value)}
-                >
-                  {PLAN_ICON[k.value]}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
-            {raw.planState != null && read != null && raw.planState !== read ? "Your read. It differs from the system's: it counts as a pass if your plan holds and the trade wins at least 1R." : raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
-          </div>
-          {raw.planKind && (
-            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
-              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
-              {planHint(state, raw.planKind)}
-            </p>
-          )}
-        </div>
-        </details>
-      )}
-
-      {!simplifiedOption && (
         <div className="checks plan-block" data-testid="plan-block">
           {(() => {
             const plan = planStatus(t, a, ctx);
@@ -571,99 +694,16 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
               </>
             );
           })()}
-          {marketRead.length > 0 && (
-            <details style={{ marginTop: 6 }}>
-              <summary className="faint" style={{ fontSize: 12 }}>
-                Market read
-              </summary>
-              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
-                {marketRead.map((c) => (
-                  <li key={c.key} className="check-item">
-                    <span className="mark info" role="img" aria-label="For information">
-                      ·
-                    </span>
-                    <span>
-                      {c.label}
-                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                        {c.detail}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                Information only: it is not scored and never blocks an order.
-              </p>
-            </details>
-          )}
         </div>
       )}
 
-      {/* Kept even in the simplified option ticket, unlike the rest of the journal prompts below
-          it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
-          one place to leave an actual note on WHY, not just how sure, and that's worth keeping
-          even in a quick trade. */}
-      {simplifiedOption && (
-        <label className="select-field" style={{ margin: "12px 0" }}>
-          <span className="dim">Why this trade? (helps your review later)</span>
-          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-            <option value="">Not tagged</option>
-            {SETUP_TAGS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {(() => {
-        const reasonField = (
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span className="dim">Reason (optional)</span>
-            <textarea
-              className="textarea"
-              value={t.reason}
-              maxLength={NOTES_MAX}
-              rows={2}
-              onChange={(e) => set("reason", e.target.value)}
-              placeholder="What made you take this trade?"
-            />
-          </label>
-        );
-        if (simplifiedOption) return reasonField;
-        return (
-          <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
-            <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
-              Notes (optional){t.trigger || t.reason.trim() || t.confidence != null ? " ·" : ""}
-              {t.trigger ? ` ${t.trigger}` : ""}
-              {t.confidence != null ? ` · confidence ${t.confidence}` : ""}
-            </summary>
-            <label className="select-field" style={{ margin: "8px 0" }}>
-              <span className="dim">What did you see?</span>
-              <select value={t.trigger ?? ""} onChange={(e) => set("trigger", e.target.value || null)}>
-                <option value="">Not noted</option>
-                {TRIGGERS.map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {reasonField}
-            <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
-              Confidence
-            </div>
-            <div className="chips" role="group" aria-label="Confidence">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
-                  {n}
-                </button>
-              ))}
-            </div>
-          </details>
-        );
-      })()}
+      </TicketStep>
 
+      <div className="tstep-trade" data-testid="step-trade">
+        <span className="tstep-num">3</span>
+        <span className="tstep-title">Trade</span>
+        <span className="tstep-summary">{tradeSummary}</span>
+      </div>
       {[...a.errors, ...a.warnings].length > 0 && (
         <ul className="hints" aria-live="polite">
           {a.errors.map((m) => (

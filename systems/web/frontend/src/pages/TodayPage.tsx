@@ -7,7 +7,6 @@ import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { AccountCard } from "../components/AccountCard";
 import { hasSessions, SessionGrids, useSessionGrids } from "../components/SessionGrid";
-import { PositionCard } from "../components/PositionCard";
 import { Sheet } from "../components/Sheet";
 import { ClosedTrade, OpenNow, TradeTape } from "../components/TradeTape";
 import { WaitingOrders } from "../components/WaitingOrders";
@@ -16,7 +15,7 @@ import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { firstWeek } from "./onboardingModel";
 import type { Book, OptionGroup, Position } from "../api/types";
-import { bookPnl, liveDeltaFor, openSummary, tradeTape, type TapeTrade } from "./todayModel";
+import { bookPnl, liveDeltaFor, openSummary, tapeStats, tradeTape, type TapeTrade } from "./todayModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const POLL_MS = 15_000;
@@ -41,7 +40,7 @@ export function TodayPage() {
   const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
   const grids = useSessionGrids();
-  // A tapped dot opens that trade over the page; "waiting" opens the orders that have not filled yet.
+  // A tapped closed trade opens its summary over the page (an open one goes to Portfolio); "waiting" opens the orders that have not filled yet.
   const [picked, setPicked] = useState<TapeTrade | null>(null);
   const [waitingOpen, setWaitingOpen] = useState(false);
   // Open spot and futures results follow the price socket between polls.
@@ -100,7 +99,7 @@ export function TodayPage() {
 
       <div className="stack today-main">
       <TradeTape tape={tape} book={book} segments={segments} onPick={setPicked} />
-      <OpenNow count={open.count} pnl={open.pnl} noStop={open.noStop} waiting={shownWaiting.length} book={book} neverTraded={positions.length + groups.length === 0} onWaiting={() => setWaitingOpen(true)} />
+      <OpenNow count={open.count} pnl={open.pnl} noStop={open.noStop} carried={tapeStats(tape).carried} waiting={shownWaiting.length} book={book} neverTraded={positions.length + groups.length === 0} onWaiting={() => setWaitingOpen(true)} />
 
       {/* Once there is a session to show, the last sessions replace the first-week checklist. */}
       {grids.data && hasSessions(grids.data) ? <SessionGrids grids={grids.data} /> : guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
@@ -109,10 +108,7 @@ export function TodayPage() {
         <Sheet label={`${picked.symbol} trade`} onClose={() => setPicked(null)} testId="trade-sheet">
           {(() => {
             const item = picked.kind === "position" ? positions.find((p) => p.id === picked.id) : groups.find((g) => g.id === picked.id);
-            if (!item) return null;
-            if (picked.open && picked.kind === "position") return <PositionCard kind="position" item={item as Position} onChanged={() => { setPicked(null); today.reload(); }} />;
-            if (picked.open) return <PositionCard kind="group" item={item as OptionGroup} onChanged={() => { setPicked(null); today.reload(); }} />;
-            return <ClosedTrade trade={item as Position | OptionGroup} onClose={() => setPicked(null)} />;
+            return item ? <ClosedTrade trade={item as Position | OptionGroup} onClose={() => setPicked(null)} /> : null;
           })()}
         </Sheet>
       )}

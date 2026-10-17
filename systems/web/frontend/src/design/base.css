@@ -3454,3 +3454,12 @@ li a:not(.btn) {
   flex-direction: column;
   gap: 2px;
 }
+
+/* An open trade carried over from an earlier day: dashed, because it is not an intraday trade any more. */
+.tape-dot.carried {
+  border-style: dashed;
+}
+a.tape-dot {
+  display: inline-block;
+  text-decoration: none;
+}

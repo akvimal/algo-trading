@@ -1,5 +1,4 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
@@ -104,55 +103,54 @@ describe("live results on Today and Portfolio", () => {
     await waitFor(() => expect(FakeWebSocket.last!.sent.some((f) => f.action === "subscribe")).toBe(true));
     return FakeWebSocket.last!;
   };
-  // On Today an open trade is a dot; tapping it opens the trade over the page.
-  const openTrade = async () => {
-    await userEvent.click(await screen.findByRole("listitem", { name: /RELIANCE/ }));
-    return within(await screen.findByTestId("position-card"));
-  };
+  // On Today an open trade is a dot whose name carries its live result.
+  const dot = () => screen.getByRole("listitem", { name: /RELIANCE/ });
+  const dotShows = (result: string) => waitFor(() => expect(dot().getAttribute("aria-label")).toContain(result));
   const tick = (s: FakeWebSocket, symbol: string, price: number) => act(() => s.push({ type: "tick", exchange: "NSE", symbol, price }));
 
-  it("Today: a pushed price moves the position's result, the day's total and the balance, and marks the page live", async () => {
+  it("Today: a pushed price moves the trade's dot, the day's total and the balance, and marks the page live", async () => {
     renderAt("/");
-    const card = await openTrade();
-    expect(card.getByText("+₹50")).toBeInTheDocument();
+    await screen.findByRole("listitem", { name: /RELIANCE/ });
+    await dotShows("+₹50");
     expect(screen.queryByTestId("live-today")).not.toBeInTheDocument(); // not until the socket is up
     const socket = await openSocket();
     expect(socket.sent).toContainEqual({ action: "subscribe", exchange: "NSE", symbol: "RELIANCE" });
     expect(await screen.findByTestId("live-today")).toBeInTheDocument();
     tick(socket, "RELIANCE", 1030);
-    await waitFor(() => expect(card.getByText("+₹300")).toBeInTheDocument()); // (1,030 − 1,000) × 10
+    await dotShows("+₹300"); // (1,030 − 1,000) × 10
     expect(within(screen.getByTestId("account-card")).getByText("+₹300")).toBeInTheDocument();
     expect(screen.getByText("₹2,00,300")).toBeInTheDocument(); // 2,00,000 balance + the 300 now open (the server said 50, it has moved 250 since)
+    expect(within(screen.getByTestId("open-now")).getByText("+₹300")).toBeInTheDocument();
     tick(socket, "RELIANCE", 990);
-    await waitFor(() => expect(card.getByText("−₹100")).toBeInTheDocument());
+    await dotShows("−₹100");
   });
 
   it("Today: another symbol's tick changes nothing", async () => {
     renderAt("/");
-    const card = await openTrade();
+    await screen.findByRole("listitem", { name: /RELIANCE/ });
     const socket = await openSocket();
     tick(socket, "TCS", 4000);
-    expect(card.getByText("+₹50")).toBeInTheDocument();
+    await dotShows("+₹50");
   });
 
   it("Today: while the socket is down the polled figures stand, and it is not marked live", async () => {
     renderAt("/");
-    const card = await openTrade();
+    await screen.findByRole("listitem", { name: /RELIANCE/ });
     const socket = await openSocket();
     tick(socket, "RELIANCE", 1030);
-    await waitFor(() => expect(card.getByText("+₹300")).toBeInTheDocument());
+    await dotShows("+₹300");
     act(() => socket.drop());
-    await waitFor(() => expect(card.getByText("+₹50")).toBeInTheDocument());
+    await dotShows("+₹50");
     expect(screen.queryByTestId("live-today")).not.toBeInTheDocument();
   });
 
   it("Today: a short is valued the other way round", async () => {
     positions = [pos({ action: "SELL", unrealized_pnl: -50 })];
     renderAt("/");
-    const card = await openTrade();
+    await screen.findByRole("listitem", { name: /RELIANCE/ });
     const socket = await openSocket();
     tick(socket, "RELIANCE", 980);
-    await waitFor(() => expect(card.getByText("+₹200")).toBeInTheDocument());
+    await dotShows("+₹200");
   });
 
   it("Today: subscribes to nothing when there are no open positions", async () => {

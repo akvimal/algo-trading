@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { api } from "../api/http";
 import type { Book, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { formatPct, formatPnl, formatTime } from "../format";
@@ -5,6 +6,8 @@ import { useResource } from "../hooks/useResource";
 import { tapeStats, type TapeTrade } from "../pages/todayModel";
 import { Signed } from "./bits";
 import { LinkRow, NextStep } from "./nav";
+
+const shortDay = (iso: string) => new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" }).format(new Date(iso));
 
 /** A trade's dot grows with how much it made or lost (14 to 28px), relative to the biggest of the day. */
 export const dotSize = (pnl: number, maxAbs: number): number => 14 + Math.round(14 * (maxAbs > 0 ? Math.min(1, Math.abs(pnl) / maxAbs) : 0));
@@ -43,13 +46,14 @@ export function TradeTape({ tape, book, segments, onPick }: Props) {
   const stats = tapeStats(tape);
   const maxAbs = Math.max(0, ...tape.map((t) => Math.abs(t.pnl)));
   const since = useSinceReset(book, segments);
+  const positionsHref = `/portfolio?tab=positions${book === "positional" ? "&book=positional" : ""}`;
   const sinceData = since.data && since.data.trades > 0 ? since.data : null;
 
   return (
     <div className="card tape" data-testid="trade-tape">
       <div className="row">
         <h2 className="section-title" style={{ margin: 0 }}>Today&apos;s trades</h2>
-        <span className="dim" style={{ fontSize: 13 }}>{stats.closed} closed · {stats.open} open</span>
+        <span className="dim" style={{ fontSize: 13 }}>{stats.closed} closed · {stats.open} open{stats.carried > 0 ? ` (${stats.carried} carried over)` : ""}</span>
       </div>
       {tape.length === 0 ? (
         <p className="dim" style={{ margin: "8px 0 0" }}>No trades yet today.</p>
@@ -59,17 +63,16 @@ export function TradeTape({ tape, book, segments, onPick }: Props) {
             {tape.map((t) => {
               const size = dotSize(t.pnl, maxAbs);
               const tone = t.pnl > 0 ? "win" : t.pnl < 0 ? "loss" : "flat";
-              return (
-                <button
-                  key={t.id}
-                  role="listitem"
-                  className={`tape-dot ${tone}${t.open ? " open" : ""}`}
-                  style={{ width: size, height: size }}
-                  onClick={() => onPick(t)}
-                  aria-label={`${t.symbol} ${t.action === "BUY" ? "buy" : "sell"}, ${t.open ? "open" : "closed"}, ${formatPnl(t.pnl)}`}
-                  title={`${t.symbol} · ${formatPnl(t.pnl)}${t.open ? " (open)" : ""} · ${formatTime(t.at)}`}
-                />
-              );
+              const state = t.open ? (t.carried ? "open, carried over from an earlier day" : "open") : "closed";
+              const common = {
+                role: "listitem",
+                className: `tape-dot ${tone}${t.open ? " open" : ""}${t.carried ? " carried" : ""}`,
+                style: { width: size, height: size },
+                "aria-label": `${t.symbol} ${t.action === "BUY" ? "buy" : "sell"}, ${state}, ${formatPnl(t.pnl)}`,
+                title: t.open ? `${t.symbol} · ${formatPnl(t.pnl)} (${t.carried ? `carried over, opened ${shortDay(t.at)}` : "open"})` : `${t.symbol} · ${formatPnl(t.pnl)} · ${formatTime(t.at)}`,
+              };
+              // An open trade is managed on Portfolio → Positions (no pop-up here); a finished one opens its summary.
+              return t.open ? <Link key={t.id} to={positionsHref} {...common} /> : <button key={t.id} onClick={() => onPick(t)} {...common} />;
             })}
           </div>
           <div className="tape-stats">
@@ -98,8 +101,8 @@ export function TradeTape({ tape, book, segments, onPick }: Props) {
 }
 
 /** One line on what is open and what needs attention, instead of a card per position. */
-export function OpenNow({ count, pnl, noStop, waiting, book, neverTraded, onWaiting }: {
-  count: number; pnl: number; noStop: number; waiting: number; book: Book; neverTraded: boolean; onWaiting: () => void;
+export function OpenNow({ count, pnl, noStop, carried, waiting, book, neverTraded, onWaiting }: {
+  count: number; pnl: number; noStop: number; carried: number; waiting: number; book: Book; neverTraded: boolean; onWaiting: () => void;
 }) {
   return (
     <div className="card" data-testid="open-now">
@@ -118,6 +121,9 @@ export function OpenNow({ count, pnl, noStop, waiting, book, neverTraded, onWait
       ) : (
         <p style={{ margin: "8px 0 0" }}>
           <strong>{count} open</strong>
+          {carried > 0 && (
+            <span className="pill" style={{ marginLeft: 8 }} data-testid="carried" title="Opened on an earlier day and still open, so it is not an intraday trade now">{carried} carried over</span>
+          )}
           {noStop > 0 ? (
             <span className="pill warn" style={{ marginLeft: 8 }} data-testid="no-stop">{noStop} without a stop</span>
           ) : (

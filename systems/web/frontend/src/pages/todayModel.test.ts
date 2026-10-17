@@ -159,6 +159,15 @@ describe("the day's tape", () => {
     expect(tapeStats([]).winRate).toBeNull();
   });
 
+  it("flags a trade still open from an earlier day as carried over, whatever it was opened as", () => {
+    const positions = [pos({ id: "today", entry_time: TODAY }), pos({ id: "old", entry_time: YESTERDAY })];
+    const groups = [grp({ id: "g", entry_time: "2026-09-23T05:00:00Z", segment: "NSE" })];
+    const tape = tradeTape(positions, groups, "intraday", ["NSE"], NOW);
+    expect(Object.fromEntries(tape.map((t) => [t.id, t.carried]))).toEqual({ today: false, old: true, g: true });
+    expect(tapeStats(tape).carried).toBe(2);
+    expect(tradeTape([closedAt("done", 5, 3, { entry_time: YESTERDAY })], [], "intraday", ["NSE"], NOW)[0].carried).toBe(false); // a closed trade is never "carried"
+  });
+
   it("summarises what is open: how many, the live result, and how many have no stop", () => {
     const positions = [pos({ id: "a", unrealized_pnl: 30, stop_loss_price: 95 }), pos({ id: "b", unrealized_pnl: -10 }), pos({ id: "c", segment: "MCX", unrealized_pnl: 999 })];
     const groups = [grp({ id: "g", unrealized_pnl: 5, spot_stop_loss_price: 100 }), grp({ id: "h", unrealized_pnl: 5 })];

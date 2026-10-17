@@ -96,7 +96,8 @@ export function recentTrend(points: EquityPoint[], liveBalance: number, days = 1
 
 // ---- the day as a tape of trades (replaces the list of open positions on Home)
 
-export type TapeTrade = { id: string; kind: "position" | "group"; symbol: string; action: "BUY" | "SELL"; pnl: number; open: boolean; at: string };
+/** `carried`: still open from an earlier day, so it is not an intraday trade any more whatever it was opened as. */
+export type TapeTrade = { id: string; kind: "position" | "group"; symbol: string; action: "BUY" | "SELL"; pnl: number; open: boolean; at: string; carried: boolean };
 
 const groupSegment = (g: OptionGroup): Segment => g.segment ?? "NSE";
 
@@ -106,14 +107,14 @@ export function tradeTape(positions: Position[], groups: OptionGroup[], book: Bo
   const open: TapeTrade[] = [];
   for (const p of standalonePositions(positions)) {
     if (!segments.includes(p.segment) || !inBook(p.horizon, book)) continue;
-    if (p.status === "OPEN") open.push({ id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.unrealized_pnl ?? 0, open: true, at: p.entry_time });
-    else if (p.status === "CLOSED" && p.exit_time && isToday(p.exit_time, now)) closed.push({ id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.pnl ?? 0, open: false, at: p.exit_time });
+    if (p.status === "OPEN") open.push({ id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.unrealized_pnl ?? 0, open: true, at: p.entry_time, carried: !isToday(p.entry_time, now) });
+    else if (p.status === "CLOSED" && p.exit_time && isToday(p.exit_time, now)) closed.push({ id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.pnl ?? 0, open: false, at: p.exit_time, carried: false });
   }
   if (book === "intraday") {
     for (const g of groups) {
       if (!segments.includes(groupSegment(g))) continue;
-      if (g.status === "OPEN") open.push({ id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.unrealized_pnl ?? 0, open: true, at: g.entry_time });
-      else if (g.status === "CLOSED" && g.exit_time && isToday(g.exit_time, now)) closed.push({ id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.pnl ?? 0, open: false, at: g.exit_time });
+      if (g.status === "OPEN") open.push({ id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.unrealized_pnl ?? 0, open: true, at: g.entry_time, carried: !isToday(g.entry_time, now) });
+      else if (g.status === "CLOSED" && g.exit_time && isToday(g.exit_time, now)) closed.push({ id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.pnl ?? 0, open: false, at: g.exit_time, carried: false });
     }
   }
   const byTime = (a: TapeTrade, b: TapeTrade) => a.at.localeCompare(b.at);
@@ -123,6 +124,8 @@ export function tradeTape(positions: Position[], groups: OptionGroup[], book: Bo
 export type TapeStats = {
   closed: number;
   open: number;
+  /** Of the open ones, how many were opened on an earlier day. */
+  carried: number;
   wins: number;
   losses: number;
   /** Wins as a share of the trades that won or lost (a flat trade is neither); null before any. */
@@ -148,7 +151,7 @@ export function tapeStats(tape: TapeTrade[]): TapeStats {
     streak = { kind, n };
   }
   return {
-    closed: closed.length, open: open.length, wins, losses, winRate: wins + losses > 0 ? wins / (wins + losses) : null,
+    closed: closed.length, open: open.length, carried: open.filter((t) => t.carried).length, wins, losses, winRate: wins + losses > 0 ? wins / (wins + losses) : null,
     best: closed.length ? Math.max(...closed.map((t) => t.pnl)) : null, worst: closed.length ? Math.min(...closed.map((t) => t.pnl)) : null,
     streak, openPnl: open.reduce((n, t) => n + t.pnl, 0),
   };

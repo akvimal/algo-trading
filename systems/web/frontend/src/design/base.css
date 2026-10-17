@@ -3203,3 +3203,25 @@ li a:not(.btn) {
 .sgrid-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; }
 .sgrid-key { display: inline-flex; align-items: center; gap: 6px; }
 .sgrid-key .sgrid-cell { display: inline-block; width: 18px; height: 14px; }
+
+/* On the Markets page the report tabs show their names beside the icons, pushed to the right, once there is room (the Trade page's narrow popup keeps icons only). */
+.tab-label {
+  display: none;
+}
+@media (min-width: 900px) {
+  .markets-card .market-info-head {
+    justify-content: space-between;
+  }
+  .markets-card .market-info-head .chips[role="tablist"] {
+    margin-left: auto;
+  }
+  .markets-card .market-info-head .chips button.icon-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+  }
+  .markets-card .tab-label {
+    display: inline;
+  }
+}

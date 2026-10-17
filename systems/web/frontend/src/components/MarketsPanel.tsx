@@ -60,6 +60,7 @@ export function MarketsPanel({ segment, symbol, markets, onViewChange }: { segme
         {tabs.map((t) => (
           <button key={t.id} role="tab" className="icon-tab" aria-label={t.label} title={t.label} aria-selected={shown === t.id} aria-pressed={shown === t.id} onClick={() => setTab(t.id)}>
             {t.icon}
+            <span className="tab-label">{t.label}</span>
           </button>
         ))}
       </div>

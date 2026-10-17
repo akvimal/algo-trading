@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { LinkRow } from "../components/nav";
-import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import type { Segment } from "../api/types";
 import { SEGMENT_CHOICES } from "./onboardingModel";

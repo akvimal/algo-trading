@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { NextStep } from "../components/nav";
 import { api } from "../api/http";
 import type { LiveEligibility, MistakeSummary, Segment } from "../api/types";
@@ -15,6 +15,10 @@ import { focusHabit, habitRows, runLabel, type HabitRow } from "./learnModel";
 import { LEVEL_LABEL, tagLabel } from "./journalModel";
 
 const SEGMENT_LABEL: Record<Segment, string> = { NSE: "Stocks & F&O", MCX: "Commodities", CRYPTO: "Crypto" };
+const TABS = [
+  { id: "progress", label: "My progress" },
+  { id: "path", label: "Lessons" },
+] as const;
 const parseSegment = (v: string | null): Segment => ((SEGMENTS as readonly string[]).includes(v ?? "") ? (v as Segment) : "NSE");
 
 /** Learn: are you ready for live trading, which habit to fix next (from your own reviewed trades), and the learning path.
@@ -23,8 +27,10 @@ export function LearnPage() {
   const [params, setParams] = useSearchParams();
   const { markets } = useProfile();
   const segment = parseSegment(params.get("segment"));
-  const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment]);
-  const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment]);
+  const tab = params.get("tab") === "path" ? "path" : "progress";
+  const progress = tab === "progress";
+  const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment], { enabled: progress });
+  const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment], { enabled: progress });
 
   return (
     <div className="stack">
@@ -32,17 +38,28 @@ export function LearnPage() {
       <p className="dim" style={{ margin: 0 }}>
         Where you stand, what to fix first, and the path from the basics to live trading. It teaches process and risk, never what to buy.
       </p>
-      <div className="chips" role="group" aria-label="Account">
-        {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
-          <button key={s} aria-pressed={segment === s} onClick={() => setParams({ segment: s }, { replace: true })}>
-            {SEGMENT_LABEL[s]}
+      <div className="chips" role="tablist" aria-label="Learn sections">
+        {TABS.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setParams(t.id === "path" ? { tab: "path" } : { segment }, { replace: true })}>
+            {t.label}
           </button>
         ))}
       </div>
-
-      <Readiness elig={elig} />
-      <Habits mistakes={mistakes} segment={segment} />
-      <Path />
+      {progress ? (
+        <>
+          <div className="chips" role="group" aria-label="Account">
+            {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
+              <button key={s} aria-pressed={segment === s} onClick={() => setParams({ segment: s }, { replace: true })}>
+                {SEGMENT_LABEL[s]}
+              </button>
+            ))}
+          </div>
+          <Readiness elig={elig} />
+          <Habits mistakes={mistakes} segment={segment} />
+        </>
+      ) : (
+        <Path />
+      )}
     </div>
   );
 }

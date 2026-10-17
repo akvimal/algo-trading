@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { NextStep } from "../components/nav";
-import { Link } from "react-router-dom";
 import { api } from "../api/http";
 import { listWaitingOrders } from "../api/trade";
 import type { Account, PendingOrder } from "../api/types";

@@ -2,7 +2,6 @@ import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { NextStep } from "./nav";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
 import { useProfile } from "../auth/ProfileContext";

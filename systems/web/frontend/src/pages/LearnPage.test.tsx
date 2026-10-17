@@ -127,6 +127,9 @@ describe("LearnPage", () => {
     await userEvent.click(within(screen.getByTestId("habit-map")).getByRole("button", { name: /No stop/ }));
     await userEvent.click(screen.getByTestId("habit-sheet")); // the backdrop closes it
     expect(screen.queryByTestId("habit-detail")).toBeNull();
+    expect(screen.queryByTestId("path")).toBeNull(); // the lessons are their own tab
+    await userEvent.click(screen.getByRole("tab", { name: "Lessons" }));
+    expect(screen.queryByTestId("habits")).toBeNull();
     await userEvent.click(screen.getByText(/Part A: Reading the market/));
     const lessons = within(screen.getByTestId("path")).getAllByTestId("lesson");
     expect(lessons).toHaveLength(26); // 12 + 7 + 2 + 5

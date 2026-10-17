@@ -313,7 +313,12 @@ describe("the page", () => {
     // none of it is left outside the ticket
     expect(screen.getAllByRole("group", { name: "Your view" })).toHaveLength(1);
     expect(screen.getAllByRole("group", { name: "Instrument" })).toHaveLength(1);
-    expect(within(t.getByTestId("step-study")).getByRole("button", { name: /Study/ })).toHaveTextContent("Bearish");
+    // the same Study panel as for an index or a stock: the market state and the setup, notes, and the save action
+    expect(study.getByRole("group", { name: "Market state" })).toBeInTheDocument();
+    expect(study.getByRole("group", { name: "Plan" })).toBeInTheDocument();
+    expect(study.getByRole("button", { name: "Trending up" })).toHaveTextContent("Trending up");
+    expect(study.getByTestId("ticket-notes")).toBeInTheDocument();
+    expect(study.getByRole("button", { name: "Save study" })).toBeInTheDocument();
   });
 
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
@@ -1115,6 +1120,25 @@ describe("the notes panel under the chart", () => {
     expect(sent.context.price).toBe(1000);
     expect(sent.context.interval).toBe("15min");
     expect(sent).not.toHaveProperty("snapshot_png_base64");
+  });
+});
+
+describe("saving the study", () => {
+  it("sends the study words with the plan tag, and says when the chart could not be pictured", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" }));
+    await user.type(t.getByLabelText(/Reason/), "Held the level.");
+    await user.click(within(t.getByTestId("step-study")).getByRole("button", { name: "Save study" }));
+    await waitFor(() => expect(posts("/study-notes")).toHaveLength(1));
+    const sent = posts("/study-notes")[0].body;
+    expect(sent).toMatchObject({ segment: "NSE", symbol: "RELIANCE", tag: "plan" });
+    expect(sent.text).toMatch(/^RELIANCE: looking to buy\./);
+    expect(sent.text).toContain("Setup: Trend breakout.");
+    expect(sent.text).toContain("Held the level.");
+    expect(await t.findByTestId("study-save-status")).toHaveTextContent(/Study saved/);
+    expect(within(t.getByTestId("step-study")).queryByRole("button", { name: "Publish…" })).not.toBeInTheDocument(); // the operator only
   });
 });
 

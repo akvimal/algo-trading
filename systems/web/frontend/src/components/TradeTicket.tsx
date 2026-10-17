@@ -5,7 +5,7 @@ import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
 import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
-import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
+import { NOTES_MAX } from "../pages/journalModel";
 import {
   ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, cryptoLeverage, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
   planSide, planStatus,
@@ -89,6 +89,8 @@ type Props = {
   /** A host's own controls for the first two steps (the OI-buildup option form's view, and its expiry, legs and exit levels): they sit at the top of Study and of Plan. */
   studyTop?: React.ReactNode;
   planTop?: React.ReactNode;
+  /** A host's save/publish controls for the study: given the study in words ("" while nothing is decided yet), they sit at the end of Study. */
+  studyActions?: (study: { text: string }) => React.ReactNode;
 };
 
 type StepTone = "good" | "warn" | "na";
@@ -113,7 +115,7 @@ export function TicketStep({ n, title, summary, tone, open, onToggle, children, 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop, studyActions }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -228,10 +230,20 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const stateWord = state == null ? "No read" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓";
   const overridden = raw.planState != null && read != null && raw.planState !== read;
   const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
-  const studySummary = simplifiedOption
-    ? [t.action === "BUY" ? "Bullish" : "Bearish", t.setupTag ?? "not tagged"].join(" · ")
-    : [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup"].filter(Boolean).join(" · ");
-  const studyTone: StepTone = simplifiedOption ? (t.setupTag ? "good" : "na") : planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
+  const studySummary = [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup"].filter(Boolean).join(" · ");
+  // The study as a few plain sentences, for saving or publishing it: the side, what the market is doing, the setup and the reason.
+  const studyWords = (() => {
+    const stateText = state == null ? null : state === "ranging" ? "ranging" : state === "trending_up" ? "trending up" : "trending down";
+    const setup = t.setupTag ?? kindLabel;
+    if (!stateText && !setup && !t.reason.trim()) return "";
+    return [
+      `${ctx.symbol}: looking to ${t.action === "BUY" ? "buy" : "sell"}.`,
+      stateText ? `Market ${stateText}${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}${overridden ? ", my read" : ""}.` : null,
+      setup ? `Setup: ${setup}.` : null,
+      t.reason.trim() ? t.reason.trim() : null,
+    ].filter(Boolean).join(" ").slice(0, NOTES_MAX);
+  })();
+  const studyTone: StepTone = planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
   const planNow = planStatus(t, a, ctx);
   const legsText = t.primaryStrike != null ? `${t.primaryStrike}${t.secondStrike != null && t.strategy !== "naked" ? ` / ${t.secondStrike}` : ""}` : null;
   const planSummary = simplifiedOption ? [instrumentLabel, legsText, limit ? "waits for a price" : "at the market"].filter(Boolean).join(" · ") : planNow?.text ?? "Set a stop and a target";
@@ -356,7 +368,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
 
       <TicketStep n={1} title="Study" summary={studySummary} tone={studyTone} open={step === 1} onToggle={() => setStep(step === 1 ? 2 : 1)} testId="step-study">
       {studyTop}
-      {!simplifiedOption && (
+      {(
         <>
         <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
           <div className="plan-icons">
@@ -430,23 +442,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           )}
         </>
       )}
-      {/* Kept even in the simplified option ticket, unlike the rest of the journal prompts below
-          it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
-          one place to leave an actual note on WHY, not just how sure, and that's worth keeping
-          even in a quick trade. */}
-      {simplifiedOption && (
-        <label className="select-field" style={{ margin: "12px 0" }}>
-          <span className="dim">Why this trade? (helps your review later)</span>
-          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-            <option value="">Not tagged</option>
-            {SETUP_TAGS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
       {(() => {
         const reasonField = (
           <label className="field" style={{ marginBottom: 12 }}>
@@ -461,7 +456,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             />
           </label>
         );
-        if (simplifiedOption) return reasonField;
         return (
           <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
             <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
@@ -472,6 +466,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         );
       })()}
 
+      {studyActions?.({ text: studyWords })}
       <button type="button" className="link-btn tstep-next" onClick={() => setStep(2)}>
         Next: Plan ›
       </button>

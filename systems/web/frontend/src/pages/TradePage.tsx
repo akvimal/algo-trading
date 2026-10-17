@@ -27,6 +27,7 @@ import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, checkWaitingMove, isContractOf, openLevels, toChartTrades, waitingLevels, type OpenLevel } from "../chart/trades";
 import { NotesPanel } from "../components/NotesPanel";
+import { StudySave } from "../components/StudySave";
 import { buildNoteContext } from "../components/notesModel";
 import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
@@ -629,6 +630,17 @@ export function TradePage() {
         hideOptionExtras={optionFormHere && ticket.strategy !== "future"}
         studyTop={studyTop}
         planTop={planTop}
+        studyActions={(study) => (
+          <StudySave
+            segment={activeSpec.segment}
+            symbol={activeSpec.symbol}
+            interval={activeSpec.interval}
+            text={study.text}
+            getContext={noteContextFor}
+            getChartImage={(opts) => paneRefs[active].current?.snapshot(opts) ?? { problem: activeData.error ? `the chart did not load (${activeData.error.message})` : "the chart is not on screen yet" }}
+            getOiItems={() => oiStripItems(oi[active].summary, oi[active].sentiment, oi[active].levels, tools.oiLevelsOn, formatPrice)}
+          />
+        )}
       />
 
     );

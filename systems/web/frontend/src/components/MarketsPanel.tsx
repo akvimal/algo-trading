@@ -5,6 +5,7 @@ import { CalendarTab } from "../workstation/CalendarTab";
 import { useResource } from "../hooks/useResource";
 import { BIAS_LABEL, nseSessionStarted, shortDate } from "../pages/premarketModel";
 import { ErrorNotice, Skeleton } from "./bits";
+import { InfoFoot, InfoHead, InfoLead, InfoList, InfoRow } from "./InfoShell";
 import { PremarketCard } from "./PremarketCard";
 import { CalendarIcon, NewsIcon, PulseIcon, SunriseIcon } from "../chart/icons";
 
@@ -88,30 +89,21 @@ function NewsTab({ segment, symbol }: { segment: MarketSegment; symbol: string }
   const d = news.data;
   if (!d) return null;
   return (
-    <div className="stack">
-      <div className="row" style={{ alignItems: "baseline" }}>
-        <h2 className="section-title" style={{ margin: 0 }}>
-          News · {symbol}
-        </h2>
-        <span className={BIAS_PILL[d.bias]}>{BIAS_LABEL[d.bias]}</span>
-      </div>
-      {d.digest && <p style={{ margin: 0 }}>{d.digest}</p>}
-      {d.bias_reason && <p className="dim" style={{ margin: 0, fontSize: 13 }}>{d.bias_reason}</p>}
-      {d.articles.length === 0 && <p className="dim">No headlines right now.</p>}
-      <ul className="market-info-news">
+    <div className="stack info-section" data-testid="news-report">
+      <InfoHead title={`News · ${symbol}`} status={<span className={BIAS_PILL[d.bias]}>{BIAS_LABEL[d.bias]}</span>} onRefresh={news.reload} busy={news.refreshing} refreshLabel="Refresh the news" />
+      {d.digest ? <InfoLead>{d.digest}</InfoLead> : d.articles.length === 0 ? <InfoLead>No headlines right now.</InfoLead> : null}
+      {d.bias_reason && <p className="info-reason">{d.bias_reason}</p>}
+      <InfoList label="Headlines">
         {d.articles.map((a) => (
-          <li key={a.url}>
-            <a href={a.url} target="_blank" rel="noreferrer">
-              {a.title}
-            </a>
-            <span className="faint" style={{ display: "block", fontSize: 12 }}>
-              {[a.source, shortDate(a.published_at)].filter(Boolean).join(" · ")}
-            </span>
-            {a.why && <span className="dim" style={{ display: "block", fontSize: 12 }}>{a.why}</span>}
-          </li>
+          <InfoRow
+            key={a.url}
+            primary={<a href={a.url} target="_blank" rel="noreferrer">{a.title}</a>}
+            secondary={[a.source, shortDate(a.published_at)].filter(Boolean).join(" · ")}
+            tertiary={a.why}
+          />
         ))}
-      </ul>
-      <span className="faint" style={{ fontSize: 12 }}>Headlines from public feeds, read by an AI model. Context, not a recommendation.</span>
+      </InfoList>
+      <InfoFoot>Headlines from public feeds, read by an AI model. Context, not a recommendation.</InfoFoot>
     </div>
   );
 }

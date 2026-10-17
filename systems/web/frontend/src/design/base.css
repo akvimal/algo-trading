@@ -3225,3 +3225,128 @@ li a:not(.btn) {
     display: inline;
   }
 }
+
+/* Market reports (Pre-market / Brief / Pulse, News, Calendar) share one anatomy: head, lead, rows, foot. See components/InfoShell.tsx. */
+.info-section {
+  min-width: 0;
+}
+.info-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.info-title {
+  margin: 0;
+  flex: 1 1 auto;
+}
+.info-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+.info-lead {
+  margin: 0;
+  line-height: 1.5;
+  font-size: 15px;
+}
+.info-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+}
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-group {
+  break-inside: avoid;
+  margin-bottom: 8px;
+}
+.info-group-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim, inherit);
+  margin: 4px 0;
+}
+.info-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  break-inside: avoid;
+  overflow-wrap: anywhere;
+}
+.info-row.with-lead {
+  grid-template-columns: 56px 1fr auto;
+}
+.info-list > .info-row:first-child,
+.info-group-title + .info-row {
+  border-top: 0;
+}
+.info-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.info-row-primary a {
+  display: inline-block;
+  padding: 2px 0;
+}
+.info-row-secondary,
+.info-row-tertiary {
+  font-size: 12px;
+  color: var(--text-dim, inherit);
+}
+.info-row-lead {
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+  white-space: nowrap;
+}
+.info-row-aside {
+  white-space: nowrap;
+  text-align: right;
+}
+.info-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint, var(--text-dim, inherit));
+}
+.info-details > summary {
+  list-style-position: inside;
+}
+@media (max-width: 480px) {
+  /* A phone: the head's status drops under the title, and a long figure never squeezes the label. */
+  .info-status {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .info-row.with-lead {
+    grid-template-columns: 48px 1fr auto;
+  }
+}
+@media (min-width: 900px) {
+  /* The Markets page has room: lists run in two columns so a wide screen is not one long strip. */
+  .markets-card .info-list,
+  .markets-card .info-details > .stack {
+    display: block;
+    column-count: 2;
+    column-gap: 32px;
+  }
+  .markets-card .info-details > .stack > * {
+    break-inside: avoid;
+    margin-bottom: 12px;
+  }
+  .markets-card .info-lead {
+    max-width: 78ch;
+  }
+}

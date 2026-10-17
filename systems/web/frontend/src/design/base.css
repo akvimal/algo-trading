@@ -3411,3 +3411,46 @@ li a:not(.btn) {
 @media (prefers-reduced-motion: reduce) {
   .ai-spinner, .ai-bar > i { animation: none; }
 }
+
+/* Home: the day's trades as a row of dots with the win rate beside it. */
+.tape-dots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  min-height: 30px;
+}
+.tape-dot {
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.tape-dot.win { background: var(--up); }
+.tape-dot.loss { background: var(--dn); }
+.tape-dot.flat { background: var(--surface-2); border-color: var(--border); }
+.tape-dot.open {
+  background: transparent;
+  animation: tape-pulse 2s ease-in-out infinite;
+}
+.tape-dot.open.win { border-color: var(--up); }
+.tape-dot.open.loss { border-color: var(--dn); }
+.tape-dot.open.flat { border-color: var(--text-dim, var(--border)); }
+@keyframes tape-pulse {
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tape-dot.open { animation: none; }
+}
+.tape-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.tape-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
@@ -103,11 +104,16 @@ describe("live results on Today and Portfolio", () => {
     await waitFor(() => expect(FakeWebSocket.last!.sent.some((f) => f.action === "subscribe")).toBe(true));
     return FakeWebSocket.last!;
   };
+  // On Today an open trade is a dot; tapping it opens the trade over the page.
+  const openTrade = async () => {
+    await userEvent.click(await screen.findByRole("listitem", { name: /RELIANCE/ }));
+    return within(await screen.findByTestId("position-card"));
+  };
   const tick = (s: FakeWebSocket, symbol: string, price: number) => act(() => s.push({ type: "tick", exchange: "NSE", symbol, price }));
 
   it("Today: a pushed price moves the position's result, the day's total and the balance, and marks the page live", async () => {
     renderAt("/");
-    const card = within(await screen.findByTestId("position-card"));
+    const card = await openTrade();
     expect(card.getByText("+₹50")).toBeInTheDocument();
     expect(screen.queryByTestId("live-today")).not.toBeInTheDocument(); // not until the socket is up
     const socket = await openSocket();
@@ -123,7 +129,7 @@ describe("live results on Today and Portfolio", () => {
 
   it("Today: another symbol's tick changes nothing", async () => {
     renderAt("/");
-    const card = within(await screen.findByTestId("position-card"));
+    const card = await openTrade();
     const socket = await openSocket();
     tick(socket, "TCS", 4000);
     expect(card.getByText("+₹50")).toBeInTheDocument();
@@ -131,7 +137,7 @@ describe("live results on Today and Portfolio", () => {
 
   it("Today: while the socket is down the polled figures stand, and it is not marked live", async () => {
     renderAt("/");
-    const card = within(await screen.findByTestId("position-card"));
+    const card = await openTrade();
     const socket = await openSocket();
     tick(socket, "RELIANCE", 1030);
     await waitFor(() => expect(card.getByText("+₹300")).toBeInTheDocument());
@@ -143,7 +149,7 @@ describe("live results on Today and Portfolio", () => {
   it("Today: a short is valued the other way round", async () => {
     positions = [pos({ action: "SELL", unrealized_pnl: -50 })];
     renderAt("/");
-    const card = within(await screen.findByTestId("position-card"));
+    const card = await openTrade();
     const socket = await openSocket();
     tick(socket, "RELIANCE", 980);
     await waitFor(() => expect(card.getByText("+₹200")).toBeInTheDocument());
@@ -152,7 +158,7 @@ describe("live results on Today and Portfolio", () => {
   it("Today: subscribes to nothing when there are no open positions", async () => {
     positions = [];
     renderAt("/");
-    await screen.findByText("Nothing open here");
+    await screen.findByText(/once you place one/);
     const socket = FakeWebSocket.last;
     if (socket) expect(socket.sent.filter((f) => f.action === "subscribe")).toEqual([]);
   });

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { HABITS, PARTS, type Habit, type Level } from "../pages/learnCatalog";
+import { Sheet } from "./Sheet";
 import { runLabel, type HabitRow } from "../pages/learnModel";
 import { LEVEL_LABEL, tagLabel } from "../pages/journalModel";
 
@@ -43,24 +44,6 @@ export function HabitDetailCard({ habit, onClose }: { habit: Habit; onClose?: ()
   );
 }
 
-/** The detail opens over the page, where it cannot be missed: a bottom sheet on a phone, a centred panel on a desktop. Closes on the backdrop, the × or Escape. */
-function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    ref.current?.focus();
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div className="sheet-backdrop" onClick={onClose} data-testid="habit-sheet">
-      <div className="sheet" role="dialog" aria-modal="true" aria-label="Habit detail" tabIndex={-1} ref={ref} onClick={(e) => e.stopPropagation()}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 /** All the habits as a map in three columns (study, plan, execution). Each tile shows where the person stands on it; tap one for its detail. */
 export function HabitMap({ rows }: { rows: HabitRow[] }) {
   const [picked, setPicked] = useState<string | null>(null);
@@ -89,7 +72,7 @@ export function HabitMap({ rows }: { rows: HabitRow[] }) {
         ))}
       </div>
       <p className="faint" style={{ margin: 0, fontSize: 13 }}>Tap a habit to see its rule, the drill and what to read first.</p>
-      {habit && <Sheet onClose={() => setPicked(null)}><HabitDetailCard habit={habit} onClose={() => setPicked(null)} /></Sheet>}
+      {habit && <Sheet onClose={() => setPicked(null)} label="Habit detail" testId="habit-sheet"><HabitDetailCard habit={habit} onClose={() => setPicked(null)} /></Sheet>}
     </div>
   );
 }

@@ -1,21 +1,22 @@
 import { useState } from "react";
-import { LinkRow, NextStep } from "../components/nav";
 import { api } from "../api/http";
 import { listWaitingOrders } from "../api/trade";
 import type { Account, PendingOrder } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
-import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
+import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { AccountCard } from "../components/AccountCard";
 import { hasSessions, SessionGrids, useSessionGrids } from "../components/SessionGrid";
 import { PositionCard } from "../components/PositionCard";
+import { Sheet } from "../components/Sheet";
+import { ClosedTrade, OpenNow, TradeTape } from "../components/TradeTape";
 import { WaitingOrders } from "../components/WaitingOrders";
 import { formatInr, formatPnl } from "../format";
 import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { firstWeek } from "./onboardingModel";
-import type { Book } from "../api/types";
-import { bookPnl, inBook, liveDeltaFor, openGroups, openPositions } from "./todayModel";
+import type { Book, OptionGroup, Position } from "../api/types";
+import { bookPnl, liveDeltaFor, openSummary, tradeTape, type TapeTrade } from "./todayModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const POLL_MS = 15_000;
@@ -40,6 +41,9 @@ export function TodayPage() {
   const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
   const grids = useSessionGrids();
+  // A tapped dot opens that trade over the page; "waiting" opens the orders that have not filled yet.
+  const [picked, setPicked] = useState<TapeTrade | null>(null);
+  const [waitingOpen, setWaitingOpen] = useState(false);
   // Open spot and futures results follow the price socket between polls.
   const live = useLivePositions(today.data?.positions);
 
@@ -58,9 +62,9 @@ export function TodayPage() {
   });
   const totalBalance = cardRows.reduce((n, r) => n + r.account.current_balance + r.account.unrealized_pnl + r.delta, 0);
   const totalToday = cardRows.reduce((n, r) => n + r.pnl.total, 0);
-  // Everything open in the chosen book, every instrument together: option spreads and naked options belong to the everyday book.
-  const shownPositions = openPositions(positions).filter((p) => inBook(p.horizon, book));
-  const shownGroups = book === "intraday" ? openGroups(groups) : [];
+  const segments = cards.map((a) => a.segment);
+  const tape = tradeTape(positions, groups, book, segments);
+  const open = openSummary(positions, groups, book, segments);
   // A waiting order sits in the book its trade will open in (an option order is always everyday).
   const shownWaiting = today.data.waiting.filter((w) => (w.strategy === "naked" || w.strategy === "spread" ? book === "intraday" : (w.horizon ?? "intraday") === book));
 
@@ -95,34 +99,28 @@ export function TodayPage() {
       {today.error && <ErrorNotice error={today.error} onRetry={today.reload} />}
 
       <div className="stack today-main">
+      <TradeTape tape={tape} book={book} segments={segments} onPick={setPicked} />
+      <OpenNow count={open.count} pnl={open.pnl} noStop={open.noStop} waiting={shownWaiting.length} book={book} neverTraded={positions.length + groups.length === 0} onWaiting={() => setWaitingOpen(true)} />
+
       {/* Once there is a session to show, the last sessions replace the first-week checklist. */}
       {grids.data && hasSessions(grids.data) ? <SessionGrids grids={grids.data} /> : guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
 
-      <h2 className="section-title">Open now</h2>
-      {shownPositions.length + shownGroups.length === 0 ? (
-        <Empty title="Nothing open here">
-          {positions.length + groups.length === 0 ? (
-            <>
-              Your trades will show up here once you place one. <NextStep to="/trade">Place your first trade</NextStep>
-            </>
-          ) : (
-            "No open trades in this account."
-          )}
-        </Empty>
-      ) : (
-        <div className="stack">
-          {shownPositions.map((p) => (
-            <PositionCard key={p.id} kind="position" item={p} onChanged={today.reload} />
-          ))}
-          {shownGroups.map((g) => (
-            <PositionCard key={g.id} kind="group" item={g} onChanged={today.reload} />
-          ))}
-        </div>
+      {picked && (
+        <Sheet label={`${picked.symbol} trade`} onClose={() => setPicked(null)} testId="trade-sheet">
+          {(() => {
+            const item = picked.kind === "position" ? positions.find((p) => p.id === picked.id) : groups.find((g) => g.id === picked.id);
+            if (!item) return null;
+            if (picked.open && picked.kind === "position") return <PositionCard kind="position" item={item as Position} onChanged={() => { setPicked(null); today.reload(); }} />;
+            if (picked.open) return <PositionCard kind="group" item={item as OptionGroup} onChanged={() => { setPicked(null); today.reload(); }} />;
+            return <ClosedTrade trade={item as Position | OptionGroup} onClose={() => setPicked(null)} />;
+          })()}
+        </Sheet>
       )}
-
-      <WaitingOrders orders={shownWaiting} onChanged={today.reload} />
-
-      <LinkRow to="/markets" title="Markets" hint="Pre-market bias, headlines, the calendar and open interest" />
+      {waitingOpen && (
+        <Sheet label="Orders waiting for a price" onClose={() => setWaitingOpen(false)} testId="waiting-sheet">
+          <WaitingOrders orders={shownWaiting} onChanged={today.reload} />
+        </Sheet>
+      )}
       </div>
     </div>
   );

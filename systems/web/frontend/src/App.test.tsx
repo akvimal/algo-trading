@@ -126,18 +126,24 @@ describe("Today", () => {
       "/options/sentiment": () => json(sentiment),
     });
 
-  it("shows today's P&L with signs, the open position, and the loss budget", async () => {
+  it("shows today's P&L with signs, the day's trades as dots, and a tapped open trade over the page", async () => {
     happy();
+    const user = userEvent.setup();
     renderApp("/");
     // booked -600 today + open +250 = -350
     expect(await screen.findByText("−₹350")).toBeInTheDocument();
-    expect(screen.getByText(/RELIANCE/)).toBeInTheDocument();
-    expect(screen.queryByText(/TCS/)).not.toBeInTheDocument(); // closed trades are not "open now"
     expect(screen.getByRole("meter", { name: /daily loss budget/i })).toHaveAttribute("aria-valuenow", "350");
-    expect(screen.getByText(/SL 2,480/)).toBeInTheDocument();
+    const tape = within(screen.getByTestId("trade-tape"));
+    expect(tape.getAllByRole("listitem")).toHaveLength(2); // TCS closed today, RELIANCE open
+    expect(tape.getByRole("listitem", { name: /TCS.*closed.*−₹600/ })).toHaveClass("loss");
+    expect(tape.getByRole("listitem", { name: /RELIANCE.*open.*\+₹250/ })).toHaveClass("open");
+    expect(screen.queryByTestId("position-card")).not.toBeInTheDocument(); // no list of positions on the page
+    await user.click(tape.getByRole("listitem", { name: /RELIANCE/ }));
+    expect(within(screen.getByTestId("trade-sheet")).getByText(/SL 2,480/)).toBeInTheDocument();
     expect(screen.getByText(/Target not set/)).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Markets" })).not.toBeInTheDocument(); // Markets has its own page now
-    expect(screen.getAllByRole("link", { name: /Markets/ }).every((l) => l.getAttribute("href") === "/markets")).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("trade-sheet")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: /Markets/ })).not.toBeInTheDocument(); // Markets has its own page, not a block here
   });
 
   it("Markets is its own page, with the open-interest read for the market trading first", async () => {
@@ -193,20 +199,23 @@ describe("Today", () => {
     });
     const user = userEvent.setup();
     renderApp("/");
-    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
-    expect(screen.getByText(/BANKNIFTY/)).toBeInTheDocument();
-    expect(screen.getByText("Option")).toBeInTheDocument(); // the option card says what it is
+    const tape = within(await screen.findByTestId("trade-tape"));
+    expect(await tape.findByRole("listitem", { name: /RELIANCE/ })).toBeInTheDocument();
+    await user.click(tape.getByRole("listitem", { name: /BANKNIFTY/ })); // an option trade is a dot like any other, and says what it is when opened
+    expect(within(screen.getByTestId("trade-sheet")).getByText("Option")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("button", { name: "Options" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Intraday" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Positional" }));
-    await waitFor(() => expect(screen.queryByText(/RELIANCE/)).not.toBeInTheDocument());
-    expect(screen.queryByText(/BANKNIFTY/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("listitem", { name: /RELIANCE/ })).not.toBeInTheDocument());
+    expect(screen.queryByRole("listitem", { name: /BANKNIFTY/ })).not.toBeInTheDocument();
   });
 
   it("squares off only after an explicit confirm", async () => {
     const calls = happy();
     const user = userEvent.setup();
     renderApp("/");
+    await user.click(await screen.findByRole("listitem", { name: /RELIANCE/ }));
     await user.click(await screen.findByRole("button", { name: "Square off" }));
     expect(calls.some((c) => c.url.includes("/square-off"))).toBe(false); // one tap does nothing
     await user.click(screen.getByRole("button", { name: "Keep open" }));
@@ -238,7 +247,7 @@ describe("Today", () => {
       "/options/sentiment": () => json({ detail: "boom" }, 500),
     });
     renderApp("/");
-    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument(); // Today does not need the market pulse at all
+    expect(await screen.findByTestId("trade-tape")).toBeInTheDocument(); // Today does not need the market pulse at all
     renderApp("/markets");
     expect(await screen.findByText(/OI read unavailable/)).toBeInTheDocument();
   });

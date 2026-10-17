@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Account, OptionGroup, Position } from "../api/types";
-import { bookPnl, dayPnl, inBook, liveDeltaFor, lossBudget, openGroups, openPositions, paperBalance, recentTrend } from "./todayModel";
+import { bookPnl, dayPnl, inBook, liveDeltaFor, lossBudget, openGroups, openPositions, openSummary, paperBalance, recentTrend, tapeStats, tradeTape } from "./todayModel";
 
 const NOW = new Date("2026-09-26T06:00:00Z"); // 11:30 IST, 26 Sep
 const TODAY = "2026-09-26T05:00:00Z";
@@ -126,5 +126,43 @@ describe("account cards", () => {
     expect(withToday).not.toContain(555); // 26 Sep is today: the live balance stands in for it
     expect(withToday[withToday.length - 2]).toBe(111);
     expect(recentTrend([], 500, 10, NOW)).toEqual([500]);
+  });
+});
+
+describe("the day's tape", () => {
+  const closedAt = (id: string, pnl: number, hour: number, over: Partial<Position> = {}) => pos({ id, status: "CLOSED", pnl, exit_time: `2026-09-26T0${hour}:00:00Z`, ...over });
+  const NSE = ["NSE"] as const;
+
+  it("lists what closed today by exit time, then what is open now, with an option group once", () => {
+    const positions = [
+      closedAt("late", -40, 5), closedAt("early", 100, 3), closedAt("old", 9, 3, { exit_time: YESTERDAY }),
+      pos({ id: "open", unrealized_pnl: 25 }), pos({ id: "leg", option_group_id: "g1", status: "CLOSED", pnl: 1, exit_time: TODAY }),
+    ];
+    const groups = [grp({ id: "g1", status: "CLOSED", pnl: 60, exit_time: "2026-09-26T04:00:00Z", segment: "NSE" })];
+    expect(tradeTape(positions, groups, "intraday", [...NSE], NOW).map((t) => t.id)).toEqual(["early", "g1", "late", "open"]);
+  });
+
+  it("keeps to the book and the markets chosen", () => {
+    const positions = [closedAt("a", 10, 3), closedAt("h", 20, 3, { horizon: "positional" }), closedAt("m", 30, 3, { segment: "MCX" })];
+    expect(tradeTape(positions, [], "intraday", ["NSE"], NOW).map((t) => t.id)).toEqual(["a"]);
+    expect(tradeTape(positions, [], "positional", ["NSE"], NOW).map((t) => t.id)).toEqual(["h"]);
+    expect(tradeTape(positions, [], "intraday", ["NSE", "MCX"], NOW).map((t) => t.id).sort()).toEqual(["a", "m"]);
+  });
+
+  it("works out win rate, best, worst, the current run and the open result", () => {
+    const tape = tradeTape([closedAt("1", -50, 1), closedAt("2", 200, 2), closedAt("3", 80, 3), closedAt("4", 0, 4), pos({ id: "o", unrealized_pnl: 15 })], [], "intraday", ["NSE"], NOW);
+    const s = tapeStats(tape);
+    expect(s).toMatchObject({ closed: 4, open: 1, wins: 2, losses: 1, best: 200, worst: -50, openPnl: 15 });
+    expect(s.winRate).toBeCloseTo(2 / 3);
+    expect(s.streak).toBeNull(); // the latest closed trade was flat
+    expect(tapeStats(tradeTape([closedAt("a", -5, 1), closedAt("b", 10, 2), closedAt("c", 20, 3)], [], "intraday", ["NSE"], NOW)).streak).toEqual({ kind: "win", n: 2 });
+    expect(tapeStats([]).winRate).toBeNull();
+  });
+
+  it("summarises what is open: how many, the live result, and how many have no stop", () => {
+    const positions = [pos({ id: "a", unrealized_pnl: 30, stop_loss_price: 95 }), pos({ id: "b", unrealized_pnl: -10 }), pos({ id: "c", segment: "MCX", unrealized_pnl: 999 })];
+    const groups = [grp({ id: "g", unrealized_pnl: 5, spot_stop_loss_price: 100 }), grp({ id: "h", unrealized_pnl: 5 })];
+    expect(openSummary(positions, groups, "intraday", ["NSE"])).toEqual({ count: 4, pnl: 30, noStop: 2 });
+    expect(openSummary(positions, groups, "positional", ["NSE"])).toEqual({ count: 0, pnl: 0, noStop: 0 });
   });
 });

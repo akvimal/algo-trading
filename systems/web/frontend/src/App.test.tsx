@@ -139,30 +139,24 @@ describe("Today", () => {
     expect(screen.getByRole("region", { name: "Markets" })).toBeInTheDocument();
   });
 
-  it("shows performance and a discipline score on Today, scoped to the account's own segment", async () => {
+  it("shows each account as a card: balance, the last days' trend, a discipline read, and a way into its detail", async () => {
     mockFetch({
       "/accounts": () => json([account]),
       "/option-groups": () => json([]),
       "/positions": () => json([]),
       "/options/sentiment": () => json(sentiment),
       "/equity-history": () => json({ segment: "NSE", days: 30, points: [{ snapshot_date: "2026-09-01", balance: 200000, unrealized_pnl: 0, equity: 200000, is_reset_point: true }, { snapshot_date: "2026-09-27", balance: 210000, unrealized_pnl: 0, equity: 210000, is_reset_point: false }], stats: { since: "2026-09-01", baseline: 200000, latest_equity: 210000, return_pct: 5, peak_equity: 210000, max_drawdown_pct: 0, days_tracked: 27, points: 2 } }),
-      "/performance": () =>
-        json({
-          segment: "NSE", scope: "epoch", since: "2026-09-01",
-          performance: { trades: 10, wins: 7, losses: 3, breakeven: 0, win_rate_pct: 70, total_pnl: 10000, gross_pnl: 10500, total_charges: 400, total_slippage: 100, avg_pnl: 1000, avg_win: 2000, avg_loss: -1500, profit_factor: 2.5, avg_r: 0.8, best_trade: 3000, worst_trade: -1500, max_consecutive_losses: 1 },
-          discipline: { score: 82, window_days: 30, window_start: "2026-08-28", trade_count: 10, planned: { rate: 0.9, trades: 10 }, plan_adherence: { rate: 0.8, trades: 10 }, plan_review: { rate: 0.7, trades: 10, before_rate: 0.7, after_rate: 0.7 }, outcome: { rate: 0.7, trades: 10, win_rate: 0.7, avg_r: 0.8 } },
-          equity: null,
-        }),
+      "/trade-review/summary": () => json({ segment: "NSE", reviewed: 4, pending: 2, by_level: {}, by_tag: { chased: { n: 3, pnl: -900 } }, clean: {}, flawed: {}, trades_since_last: { chased: 2 } }),
       "/discipline": () => json({ segment: "NSE", scope: "epoch", score: 82, trade_count: 10, emotions: { greed: 90, fear: 80, patience: 75 }, categories: {}, mistakes: {}, week_mistakes: {}, target_and_stop_moved: 0, emotion_counts: {}, needs_emotion: 2, coaching: null, trades: [] }),
     });
     renderApp("/");
-    expect(await screen.findByText("₹2,10,000")).toBeInTheDocument(); // equity headline
-    expect(screen.getByText("70%")).toBeInTheDocument(); // win rate
-    expect(screen.getByText("+0.80R")).toBeInTheDocument(); // expectancy
-    expect(screen.getByText("82")).toBeInTheDocument(); // discipline score, in the gauge
-    expect(screen.getByText("Good")).toBeInTheDocument(); // discipline band
-    expect(screen.getByTestId("feeling-link")).toHaveTextContent("2 to tag"); // trades waiting for a one-tap feeling
-    expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=review");
+    const card = within(await screen.findByTestId("account-card"));
+    expect(await card.findByTestId("trend")).toBeInTheDocument();
+    expect(await card.findByText("82")).toBeInTheDocument(); // discipline score
+    expect(card.getByText(/Good/)).toBeInTheDocument();
+    expect(card.getByText(/Fix next: Chased/)).toBeInTheDocument();
+    expect(card.getByRole("link", { name: /Stocks & F&O/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=overview");
+    expect(card.getByRole("link", { name: /2 to review/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=review&section=journal");
   });
 
   it("squares off only after an explicit confirm", async () => {

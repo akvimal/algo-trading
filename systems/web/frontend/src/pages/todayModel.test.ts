@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Account, OptionGroup, Position } from "../api/types";
-import { dayPnl, inMode, lossBudget, openGroups, openPositions, paperBalance } from "./todayModel";
+import { bookOf, bookPnl, cardPnl, dayPnl, inMode, liveDeltaFor, lossBudget, openGroups, openPositions, paperBalance, recentTrend } from "./todayModel";
 
 const NOW = new Date("2026-09-26T06:00:00Z"); // 11:30 IST, 26 Sep
 const TODAY = "2026-09-26T05:00:00Z";
@@ -96,5 +96,44 @@ describe("filters", () => {
 describe("paperBalance", () => {
   it("is cash plus open profit across segments", () => {
     expect(paperBalance([acct({ current_balance: 100, unrealized_pnl: 10 }), acct({ current_balance: 200, unrealized_pnl: -5 })])).toBe(305);
+  });
+});
+
+describe("account cards", () => {
+  const closedToday = (over: Partial<Position>) => pos({ status: "CLOSED", exit_time: TODAY, ...over });
+
+  it("Intraday and Positional split the day by horizon, and Options counts the option groups", () => {
+    const positions = [closedToday({ id: "i", pnl: 100 }), closedToday({ id: "h", pnl: 40, horizon: "positional" }), closedToday({ id: "m", pnl: 9, segment: "MCX" })];
+    const groups = [grp({ id: "g", status: "CLOSED", pnl: 500, exit_time: TODAY, segment: "NSE" })];
+    expect(cardPnl(positions, groups, "NSE", "intraday", NOW).total).toBe(100);
+    expect(cardPnl(positions, groups, "NSE", "positional", NOW).total).toBe(40);
+    expect(cardPnl(positions, groups, "NSE", "options", NOW).total).toBe(500);
+    expect(bookOf("options")).toBe("intraday");
+    expect(bookOf("positional")).toBe("positional");
+  });
+
+  it("an account's whole day is what its loss limit is measured against", () => {
+    const positions = [closedToday({ id: "i", pnl: -300 }), closedToday({ id: "h", pnl: -40, horizon: "positional" })];
+    const groups = [grp({ id: "g", status: "CLOSED", pnl: -100, exit_time: TODAY, segment: "NSE" })];
+    expect(bookPnl(positions, groups, "NSE", "intraday", NOW).total).toBe(-400);
+    expect(bookPnl(positions, groups, "NSE", "positional", NOW).total).toBe(-40);
+  });
+
+  it("live movement is counted per account and book", () => {
+    const before = [pos({ id: "a", unrealized_pnl: 50 }), pos({ id: "b", unrealized_pnl: 10, horizon: "positional" })];
+    const live = [pos({ id: "a", unrealized_pnl: 300 }), pos({ id: "b", unrealized_pnl: 25, horizon: "positional" })];
+    expect(liveDeltaFor(before, live, "NSE", "intraday")).toBe(250);
+    expect(liveDeltaFor(before, live, "NSE", "positional")).toBe(15);
+    expect(liveDeltaFor(before, live, "MCX", "intraday")).toBe(0);
+  });
+
+  it("the trend is the last nine day-ends plus the balance now, and today's stored point gives way to the live one", () => {
+    const point = (d: string, equity: number) => ({ snapshot_date: d, balance: equity, unrealized_pnl: 0, equity, is_reset_point: false });
+    const days = Array.from({ length: 12 }, (_, i) => point(`2026-09-${String(10 + i).padStart(2, "0")}`, 100 + i));
+    expect(recentTrend(days.slice(0, 11), 999, 10, NOW)).toEqual([102, 103, 104, 105, 106, 107, 108, 109, 110, 999]);
+    const withToday = recentTrend([...days, point("2026-09-26", 555)], 999, 10, NOW);
+    expect(withToday).not.toContain(555); // 26 Sep is today: the live balance stands in for it
+    expect(withToday[withToday.length - 2]).toBe(111);
+    expect(recentTrend([], 500, 10, NOW)).toEqual([500]);
   });
 });

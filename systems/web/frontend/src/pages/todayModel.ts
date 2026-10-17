@@ -1,5 +1,5 @@
 import { isToday } from "../format";
-import type { Account, OptionGroup, Position } from "../api/types";
+import type { Account, Book, EquityPoint, OptionGroup, Position, Segment } from "../api/types";
 
 export type Mode = "intraday" | "positional" | "options";
 
@@ -67,4 +67,42 @@ export function lossBudget(accounts: Account[], total: number): LossBudget {
 
 export function paperBalance(accounts: Account[]): number {
   return accounts.reduce((sum, a) => sum + a.current_balance + a.unrealized_pnl, 0);
+}
+
+// ---- the account cards on the home page
+
+/** Intraday and Options both trade the everyday account; Positional is its own, separate balance. */
+export const bookOf = (mode: Mode): Book => (mode === "positional" ? "positional" : "intraday");
+
+const inBook = (horizon: string | null | undefined, book: Book) => ((horizon ?? "intraday") === "positional") === (book === "positional");
+
+/** Today's result for one account card, in the toggle's view: Intraday and Positional count that kind of spot and futures trade, Options counts the option groups. */
+export function cardPnl(positions: Position[], groups: OptionGroup[], segment: Segment, mode: Mode, now: Date = new Date()): DayPnl {
+  if (mode === "options") return dayPnl([], groups.filter((g) => (g.segment ?? "NSE") === segment), now);
+  return dayPnl(positions.filter((p) => p.segment === segment && inMode(p, mode)), [], now);
+}
+
+/** Today's result for a whole account (every kind of trade on its balance): what the daily loss limit is measured against. */
+export function bookPnl(positions: Position[], groups: OptionGroup[], segment: Segment, book: Book, now: Date = new Date()): DayPnl {
+  return dayPnl(
+    positions.filter((p) => p.segment === segment && inBook(p.horizon, book)),
+    book === "intraday" ? groups.filter((g) => (g.segment ?? "NSE") === segment) : [],
+    now,
+  );
+}
+
+/** How far the live prices have moved one account's open positions since the server last reported them. */
+export function liveDeltaFor(original: Position[], live: Position[], segment: Segment, book: Book): number {
+  const before = new Map(original.map((p) => [p.id, p.unrealized_pnl ?? 0]));
+  return live
+    .filter((p) => p.segment === segment && p.status === "OPEN" && inBook(p.horizon, book))
+    .reduce((sum, p) => sum + ((p.unrealized_pnl ?? 0) - (before.get(p.id) ?? 0)), 0);
+}
+
+/** The last `days` day-end balances plus the balance right now, as the small trend on a card. Fewer than two values means there is no trend yet. */
+export function recentTrend(points: EquityPoint[], liveBalance: number, days = 10, now: Date = new Date()): number[] {
+  const past = [...points].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date));
+  const last = past[past.length - 1];
+  if (last && isToday(`${last.snapshot_date}T06:00:00Z`, now)) past.pop(); // today's point is the live one
+  return [...past.slice(-(days - 1)).map((p) => p.equity), liveBalance];
 }

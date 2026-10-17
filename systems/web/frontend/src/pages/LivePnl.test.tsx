@@ -115,7 +115,7 @@ describe("live results on Today and Portfolio", () => {
     expect(await screen.findByTestId("live-today")).toBeInTheDocument();
     tick(socket, "RELIANCE", 1030);
     await waitFor(() => expect(card.getByText("+₹300")).toBeInTheDocument()); // (1,030 − 1,000) × 10
-    expect(within(screen.getByLabelText("Today's profit and loss")).getByText("+₹300")).toBeInTheDocument();
+    expect(within(screen.getByTestId("account-card")).getByText("+₹300")).toBeInTheDocument();
     expect(screen.getByText("₹2,00,300")).toBeInTheDocument(); // 2,00,000 balance + the 300 now open (the server said 50, it has moved 250 since)
     tick(socket, "RELIANCE", 990);
     await waitFor(() => expect(card.getByText("−₹100")).toBeInTheDocument());

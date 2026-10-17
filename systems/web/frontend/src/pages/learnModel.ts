@@ -20,10 +20,10 @@ const LEVEL_ORDER = { study: 0, plan: 1, execution: 2 } as const;
 export function habitRows(summary: MistakeSummary | null | undefined): HabitRow[] {
   if (!summary) return [];
   const rows: HabitRow[] = [];
-  for (const [tag, cost] of Object.entries(summary.by_tag)) {
+  for (const [tag, cost] of Object.entries(summary.by_tag ?? {})) {
     const habit = HABIT_BY_TAG[tag];
     if (!habit) continue;
-    const sinceLast = summary.trades_since_last[tag] ?? 0;
+    const sinceLast = summary.trades_since_last?.[tag] ?? 0;
     rows.push({ habit, trades: cost.n, pnl: cost.pnl, sinceLast, cleanRun: Math.min(sinceLast, FIXED_AT), fixed: sinceLast >= FIXED_AT });
   }
   return rows.sort((a, b) => Number(a.fixed) - Number(b.fixed) || a.pnl - b.pnl || b.trades - a.trades || LEVEL_ORDER[a.habit.level] - LEVEL_ORDER[b.habit.level]);

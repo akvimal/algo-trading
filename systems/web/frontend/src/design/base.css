@@ -3138,3 +3138,73 @@ li a:not(.btn) {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* Home: one card per account. The whole card is the link (a stretched ::after); the review chip sits above it. */
+.acct-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 700px) {
+  .acct-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+.acct-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.acct-link {
+  color: inherit;
+  text-decoration: none;
+}
+.acct-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.acct-card:hover {
+  border-color: var(--accent);
+}
+.acct-figures {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.acct-figures .big {
+  font-size: 26px;
+  font-weight: 600;
+}
+.acct-today {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.acct-trend {
+  width: 100%;
+  height: 44px;
+  display: block;
+}
+.acct-discipline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.acct-chip {
+  position: relative;
+  z-index: 1;
+  align-self: flex-start;
+  text-decoration: none;
+}
+.total-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 4px;
+}

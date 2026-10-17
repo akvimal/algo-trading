@@ -95,7 +95,7 @@ type StepTone = "good" | "warn" | "na";
  * CSS, so nothing leaves the page: every field stays reachable); on a wide screen every body is open and the header is just a label. */
 function TicketStep({ n, title, summary, tone, open, onToggle, children, testId }: { n: number; title: string; summary: string; tone: StepTone; open: boolean; onToggle: () => void; children: React.ReactNode; testId: string }) {
   return (
-    <section className={`tstep${open ? " open" : ""}`} data-testid={testId}>
+    <section className={`tstep tstep-${n}${open ? " open" : ""}`} data-testid={testId}>
       <button type="button" className="tstep-head" aria-expanded={open} onClick={onToggle}>
         <span className="tstep-num">{n}</span>
         <span className="tstep-title">{title}</span>
@@ -699,7 +699,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
 
       </TicketStep>
 
-      <div className="tstep-trade" data-testid="step-trade">
+      <div className="tstep-trade tstep-3" data-testid="step-trade">
         <span className="tstep-num">3</span>
         <span className="tstep-title">Trade</span>
         <span className="tstep-summary">{tradeSummary}</span>

@@ -82,14 +82,20 @@ def unreviewed_total(db: Session, user_id: UUID, now: Optional[datetime] = None)
     """Closed manual trades of the last month, any segment, with no 'what went wrong' review yet."""
     since = (now or _now()) - timedelta(days=REVIEW_WINDOW_DAYS)
     P, G = db_models.Position, db_models.OptionPositionGroup
-    singles = db.query(P).filter(
+    singles = db.query(P.id).filter(
         P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.option_group_id.is_(None), P.horizon != "positional",
         P.exit_time >= since, P.root_cause.is_(None), P.auto_traded.isnot(True),
-    ).count()
-    groups = db.query(G).filter(
+    ).all()
+    groups = db.query(G.id).filter(
         G.user_id == user_id, G.strategy_id.is_(None), G.status == "CLOSED", G.exit_time >= since, G.root_cause.is_(None), G.auto_traded.isnot(True),
-    ).count()
-    return singles + groups
+    ).all()
+    owed = {str(r[0]) for r in singles + groups}
+    if not owed:
+        return 0
+    # a trade that went to plan needs no review, so it is not owed
+    from app.domain.on_plan import on_plan_for_user  # local: the scoring pulls in more than the inbox otherwise needs
+
+    return len(owed - on_plan_for_user(db, user_id, since.date()))
 
 
 def refresh_todos(db: Session, user_id: UUID) -> None:

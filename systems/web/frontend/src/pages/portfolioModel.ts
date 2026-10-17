@@ -105,9 +105,10 @@ export function bySetup(trades: Trade[]): SetupRow[] {
 
 /** Trades the person should still review. Anything a strategy or the auto-trader opened is
  * not reviewed by hand (the server refuses it), so it never counts as owed. */
-/** Closed manual trades still owing a review: the plan review, or the one-tap "what went wrong" (a root cause) that the results by cause run on. */
-export function unreviewed(trades: Trade[]): Trade[] {
-  return trades.filter((t) => (!t.reviewed || t.rootCause == null) && t.manual && !t.autoTraded);
+/** Closed manual trades still owing a review: the plan review, or the one-tap "what went wrong" (a root cause) that the results by cause run on.
+ * `onPlan` holds the ids of trades that went to plan (a stop, a target, the minimum reward-to-risk, no mistake found): they need no review. */
+export function unreviewed(trades: Trade[], onPlan?: ReadonlySet<string>): Trade[] {
+  return trades.filter((t) => (!t.reviewed || t.rootCause == null) && t.manual && !t.autoTraded && !(t.rootCause == null && onPlan?.has(t.id)));
 }
 
 export type Graduation = { met: number; total: number; unmet: Requirement[]; eligible: boolean; enforced: boolean };

@@ -10,16 +10,18 @@ import { TradeListItem } from "../../components/TradeListItem";
 import { formatInr, formatPct, formatPnl } from "../../format";
 import { bySetup, unreviewed, type Trade } from "../portfolioModel";
 
-type Props = { perf: Resource<Performance>; discipline: Resource<DisciplineV2>; mistakes: Resource<MistakeSummary>; trades: Trade[]; onSaved: () => void };
+type Props = { perf: Resource<Performance>; discipline: Resource<DisciplineV2>; mistakes: Resource<MistakeSummary>; trades: Trade[]; onPlan?: ReadonlySet<string>; onSaved: () => void };
 
 type Section = "journal" | "discipline" | "costs";
 
 /** Review is three short pages instead of one long one: the trades to review, the discipline score, and what trading costs. */
-export function ReviewTab({ perf, discipline, mistakes, trades, onSaved }: Props) {
+export function ReviewTab({ perf, discipline, mistakes, trades, onPlan, onSaved }: Props) {
   const [params, setParams] = useSearchParams();
   const p = perf.data?.performance ?? null;
   const manual = trades.filter((t) => t.manual && !t.autoTraded);
-  const owed = unreviewed(trades);
+  const owed = unreviewed(trades, onPlan);
+  // Trades that went to plan are cleared without a review; a note on one is optional.
+  const planned = manual.filter((t) => t.rootCause == null && onPlan?.has(t.id));
   const setups = bySetup(manual);
 
   // With trades waiting, that is what the person came to do; otherwise start at the score.
@@ -56,6 +58,17 @@ export function ReviewTab({ perf, discipline, mistakes, trades, onSaved }: Props
             <TradeListItem key={t.id} trade={t} onSaved={onSaved} cta="tap to review" />
           ))}
           {owed.length > 8 && <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>Showing the 8 most recent. Review these and the rest appear.</p>}
+          {planned.length > 0 && (
+            <details data-testid="review-on-plan" style={{ marginTop: 12 }}>
+              <summary className="dim" style={{ cursor: "pointer" }}>
+                {planned.length} went to plan: no review needed
+              </summary>
+              <p className="faint" style={{ margin: "6px 0", fontSize: 12 }}>A stop and a target set, reward-to-risk at your minimum and nothing found wrong. Add a note if you want one.</p>
+              {planned.slice(0, 8).map((t) => (
+                <TradeListItem key={t.id} trade={t} onSaved={onSaved} cta="add a note (optional)" />
+              ))}
+            </details>
+          )}
         </div>
       )}
 

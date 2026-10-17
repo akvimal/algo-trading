@@ -129,6 +129,19 @@ def override_verdict(entry_context: Optional[dict], stop0, target0, planned_rr: 
     return "lost"
 
 
+# A trade that went to plan needs no review. The checks "no review" and "untagged setup" are about the paperwork, not the trade, so they do not
+# count against it (otherwise not reviewing would be the reason it still needed a review).
+ON_PLAN_IGNORED = frozenset({"no_review", "untagged"})
+
+
+def on_plan(mistakes: list[str], stop0, target0, planned_rr: Optional[float], min_rr: float) -> bool:
+    """Whether a closed trade went to plan: a stop and a target at order time, reward-to-risk at the minimum, and no mistake found in how it was sized,
+    entered, managed or exited. Win or lose: a stop-out of a sound plan is the plan working. Such a trade is cleared without a review (notes stay optional)."""
+    if stop0 is None or target0 is None or planned_rr is None or planned_rr + _RR_TOL < min_rr:
+        return False
+    return not [m for m in mistakes if m not in ON_PLAN_IGNORED]
+
+
 def suggest(action: str, discipline_mistakes: list[str], entry_context: Optional[dict], override: Optional[str] = None) -> dict:
     """The tags the data supports for one trade, each with its level and why, and the root cause they imply. Study first, as in the chain.
     `override` is override_verdict's answer: an override that paid off clears 'against the trend', one that was neither a clear win nor a plan

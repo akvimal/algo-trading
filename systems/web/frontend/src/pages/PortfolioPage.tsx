@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { LinkRow } from "../components/nav";
 import { api } from "../api/http";
@@ -80,9 +81,14 @@ function BookPage({ view }: { view: View }) {
   const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment], { enabled: results && book === "intraday" });
   const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment], { enabled: results && book === "intraday" });
   const closed = useResource(() => loadClosed(segment, book), [segment, book]);
+  // Trades that went to plan need no review; if this cannot be read they simply stay in the list.
+  const planned = useResource(() => api<{ ids: string[] }>("execution", "/trade-review/on-plan"), [], { enabled: book === "intraday" });
+  const onPlan = useMemo(() => new Set(planned.data?.ids ?? []), [planned.data]);
+  const owed = closed.data ? unreviewed(closed.data, onPlan) : [];
   // A saved tag, note or review changes both the trade list and the numbers derived from it.
   const saved = () => {
     closed.reload();
+    planned.reload();
     if (!results) return;
     perf.reload();
     discipline.reload();
@@ -127,9 +133,9 @@ function BookPage({ view }: { view: View }) {
         ))}
       </div>
 
-      {book === "intraday" && tab !== "review" && closed.data && unreviewed(closed.data).length > 0 && (
+      {book === "intraday" && tab !== "review" && closed.data && owed.length > 0 && (
         <div className="notice" role="status" data-testid="review-nudge">
-          {unreviewed(closed.data).length} closed trade{unreviewed(closed.data).length === 1 ? "" : "s"} not reviewed yet: say what went wrong (or that nothing did).{" "}
+          {owed.length} closed trade{owed.length === 1 ? "" : "s"} not reviewed yet: say what went wrong (or that nothing did).{" "}
           <Link className="btn btn-small" to={reviewHref}>
             Review now
           </Link>
@@ -140,7 +146,7 @@ function BookPage({ view }: { view: View }) {
       {(tab === "history" || tab === "review") && closed.loading && <Skeleton lines={4} />}
       {(tab === "history" || tab === "review") && closed.error && <ErrorNotice error={closed.error} onRetry={closed.reload} />}
       {tab === "history" && closed.data && <HistoryTab trades={closed.data} onSaved={saved} />}
-      {tab === "review" && book === "intraday" && closed.data && <ReviewTab perf={perf} discipline={discipline} mistakes={mistakes} trades={closed.data} onSaved={saved} />}
+      {tab === "review" && book === "intraday" && closed.data && <ReviewTab perf={perf} discipline={discipline} mistakes={mistakes} trades={closed.data} onPlan={onPlan} onSaved={saved} />}
     </div>
   );
 }

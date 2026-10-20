@@ -4,7 +4,7 @@
 #
 # Checks, in order, why the Weekly Advisor decision form's Qty/lot-size
 # suggestion might not be populating on a given environment (built for the
-# VPS, where Caddy fronts every port with TLS - see infra/caddy/Caddyfile -
+# VPS, where Caddy fronts every port with TLS - see sites/algo-trading.caddy in the separate edge-caddy repo -
 # so a bare `curl localhost:8000` from the host doesn't reach the backend
 # directly; this runs everything from INSIDE the containers instead, same
 # as the app itself does, no Caddy/TLS involved):

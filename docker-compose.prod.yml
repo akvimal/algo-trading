@@ -1,5 +1,8 @@
-# VPS-only overlay - adds Caddy on top of the base docker-compose.yml, and
-# strips the host-port publish from every service Caddy fronts.
+# VPS-only overlay on top of the base docker-compose.yml: strips the host-port
+# publish from every service the shared Caddy fronts and joins them to the
+# external `edge` network. Caddy itself is NOT in this project any more - it is
+# a shared stack (the separate edge-caddy repo) so other projects on the VPS can use it.
+# Deploy it first (it creates the `edge` network), see that repo.
 #
 # Found live 2026-09-21: BIND_ADDR=127.0.0.1 alone (docker-compose.yml's
 # own mechanism) is NOT enough - a service still published to
@@ -9,8 +12,8 @@
 # the SAME port genuinely conflict at the OS level, regardless of Docker -
 # only ONE thing can ever own a given port number on this host. Since
 # Caddy never needs the host-published port anyway (it reaches every
-# backing service over the docker-compose network directly via service
-# name - see infra/caddy/Caddyfile's reverse_proxy targets, container
+# backing service over the docker-compose network directly via its algo-* edge alias
+# - see sites/algo-trading.caddy in the separate edge-caddy repo reverse_proxy targets, container
 # port, not host port), the fix is to remove those services' host publish
 # entirely once Caddy exists, not just rebind its address. `ports: !reset
 # []` forces a real replacement (verified locally - Compose's default
@@ -20,7 +23,7 @@
 # Usage (VPS only, after setting VPS_DOMAIN and BIND_ADDR=127.0.0.1 in .env):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build \
 #     postgres redis market-data-backend market-data-frontend signal-engine-backend \
-#     execution-backend accounts-backend web-frontend caddy
+#     execution-backend accounts-backend web-frontend
 #
 # Named explicitly, not a blanket `--profile execution up -d`: the base
 # docker-compose.yml (shared with local dev/test, never edited for VPS-only
@@ -48,7 +51,7 @@
 # refuse to start while any secret is still a placeholder / under 16 characters
 # or CORS is a wildcard (see systems/*/backend/app/secure_config.py), and
 # CORS_ALLOW_ORIGINS lists the ONLY browser origin allowed to call them:
-# web-frontend, as Caddy serves it (infra/caddy/Caddyfile) - narrowed to just
+# web-frontend, as the shared Caddy serves it (sites/algo-trading.caddy in the separate edge-caddy repo) - narrowed to just
 # this one origin 2026-09-30 now that it's the VPS's only frontend (see the
 # classic-frontend retirement note above).
 # Before deploying, make sure .env holds real values for ACCOUNTS_JWT_SECRET,
@@ -76,68 +79,51 @@ services:
   # getting a new one of its own, so nobody has to learn a new port.
   web-frontend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-web-frontend]
   signal-engine-backend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-signal-engine-backend]
     environment: *secure-backend-env
   market-data-frontend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-market-data-frontend]
   market-data-backend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-market-data-backend]
     environment: *secure-backend-env
   execution-backend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-execution-backend]
     environment: *secure-backend-env
   accounts-backend:
     ports: !reset []
+    networks:
+      default:
+      edge:
+        aliases: [algo-accounts-backend]
     environment:
       <<: *secure-backend-env
       # Behind Caddy the socket peer is the proxy, so the per-IP login/signup
       # limits must read the real client from X-Forwarded-For (Caddy sets it).
       TRUST_FORWARDED_FOR: "true"
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    environment:
-      # Caddyfile reads {$VPS_DOMAIN} - Caddy substitutes env vars into a
-      # Caddyfile at load time, same mechanism docker-compose itself uses
-      # for ${VAR} here.
-      VPS_DOMAIN: ${VPS_DOMAIN}
-    ports:
-      # 80 is required for Caddy's ACME HTTP-01 challenge (issuing/renewing
-      # the Let's Encrypt cert) even though nothing in this app uses it
-      # directly. (This VPS briefly also ran its own nginx on port 80 for
-      # unrelated sites - agentpro.co.in/rgp.agentpro.co.in - found live
-      # 2026-09-21; decommissioned rather than worked around, since nothing
-      # on it was still in use - see infra/caddy/Caddyfile's git history if
-      # that workaround (Caddy on 8078 + an nginx forwarding rule) is ever
-      # needed again on a box that DOES still need nginx for something
-      # else.) The rest mirror every *_PORT in .env - add a matching block
-      # to infra/caddy/Caddyfile AND a line here if a new service ever gets
-      # its own port.
-      - "80:80"
-      # SHELL_PORT still names the variable (unchanged in .env) - it's "the
-      # default URL"'s port number that stays put, only what's behind it
-      # changed (web-frontend, not shell - see infra/caddy/Caddyfile).
-      - "${SHELL_PORT}:${SHELL_PORT}"
-      - "${SIGNAL_ENGINE_BACKEND_PORT}:${SIGNAL_ENGINE_BACKEND_PORT}"
-      - "${MARKET_DATA_FRONTEND_PORT}:${MARKET_DATA_FRONTEND_PORT}"
-      - "${MARKET_DATA_BACKEND_PORT}:${MARKET_DATA_BACKEND_PORT}"
-      - "${EXECUTION_BACKEND_PORT}:${EXECUTION_BACKEND_PORT}"
-      - "${ACCOUNTS_BACKEND_PORT}:${ACCOUNTS_BACKEND_PORT}"
-    volumes:
-      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Cert storage - MUST persist across restarts. Let's Encrypt rate-
-      # limits certificate requests per hostname; losing this volume and
-      # re-issuing repeatedly can trip that limit.
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - web-frontend
-      - signal-engine-backend
-      - market-data-frontend
-      - market-data-backend
-
-volumes:
-  caddy-data:
-  caddy-config:
+networks:
+  # Created by the shared Caddy stack (edge-caddy repo, docker-compose.yml,
+  # deployed once at e.g. /opt/caddy on the VPS) - this project only joins it.
+  edge:
+    external: true

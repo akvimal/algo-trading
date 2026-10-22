@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
-import { getAnalysis, screenshotUrl, type StockAnalysis } from "../api/analysis";
+import { getAnalysis, getStoredAnalysis, screenshotUrl, type StockAnalysis } from "../api/analysis";
 import { formatDay, formatPrice } from "../format";
 import { AGREEMENT_LABEL, AGREEMENT_TONE, BIAS_ARROW, BIAS_WORD, biasTone, ladder, leanStrength, percent, readAge } from "./analysisModel";
 
@@ -9,11 +9,29 @@ import { AGREEMENT_LABEL, AGREEMENT_TONE, BIAS_ARROW, BIAS_WORD, biasTone, ladde
  * and asks an AI (up to about a minute, on the person's own OpenRouter key); after that it is quick. It shows ONE verdict first (what the chart and
  * the business say together, and whether they agree), then the two sides next to each other, then where the price sits between support and
  * resistance, with every individual signal one tap further. */
-export function AnalysisPanel({ symbol }: { symbol: string }) {
+export function AnalysisPanel({ symbol, auto = false, quiet = false }: { symbol: string; auto?: boolean; quiet?: boolean }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [data, setData] = useState<StockAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  // `auto`: show a read that is already stored the moment the panel opens (no capture, no model call, so nothing to wait for or pay for);
+  // where there is none the button stays, as before.
+  useEffect(() => {
+    if (!auto) return;
+    let live = true;
+    getStoredAnalysis(symbol)
+      .then((out) => {
+        if (live && out) {
+          setData(out);
+          setState("done");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [symbol, auto]);
 
   async function load(refresh: boolean) {
     setState("loading");
@@ -32,6 +50,8 @@ export function AnalysisPanel({ symbol }: { symbol: string }) {
     }
   }
 
+  // `quiet` (with `auto`): a place that only wants an existing read, not an invitation to start one (a list of positions) shows nothing until one is stored.
+  if (state === "idle" && auto && quiet) return null;
   if (state === "idle") {
     return (
       <div style={{ margin: "6px 0 0" }}>

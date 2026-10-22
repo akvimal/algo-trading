@@ -105,3 +105,20 @@ def test_a_refresh_that_fails_keeps_the_read_we_had(env):
     env.update(get=analysis(age=timedelta(days=3)), forced=None)
     out = route.get_stock_fundamentals("RELIANCE", refresh=True, caller=ME)
     assert out.refreshed is False and out.bias == "bullish"
+
+
+def test_the_stored_list_is_every_read_without_capturing_or_calling_a_model(env, monkeypatch):
+    monkeypatch.setattr(route.screener_fetch, "list_stored", lambda: [analysis(symbol="TCS"), analysis(bias="bearish", symbol="INFY")])
+    out = route.list_stored_fundamentals(caller=ME)
+    assert [(o.symbol, o.bias, o.refreshed) for o in out] == [("TCS", "bullish", False), ("INFY", "bearish", False)]
+    assert env["calls"] == []
+
+
+def test_cached_only_analysis_uses_the_stored_read_and_never_captures(env, monkeypatch):
+    from app.api.routes import analysis as aroute
+
+    monkeypatch.setattr(aroute.screener_fetch, "get_stored", lambda sym: None)
+    with pytest.raises(HTTPException) as e:
+        aroute.get_stock_analysis("RELIANCE", refresh=False, cached_only=True, caller=ME)
+    assert e.value.status_code == 404
+    assert env["calls"] == []

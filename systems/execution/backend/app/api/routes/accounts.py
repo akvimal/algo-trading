@@ -112,7 +112,7 @@ def _unrealized_pnl(db: Session, open_positions: list, token: Optional[str] = No
     return sum(inr_of(by_id[pid], pnl, rates.get(by_id[pid].user_id)) or 0.0 for pid, (_, pnl) in mtm.items())
 
 
-def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) -> dict:
+def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None, live: bool = True) -> dict:
     # Only the trades that live on THIS balance: a positional hold is marked against the positional book, not the intraday one.
     book = getattr(row, "book", "intraday")
     open_positions = db.query(db_models.Position).filter_by(user_id=row.user_id, segment=row.segment, status="OPEN").all()
@@ -127,7 +127,8 @@ def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) ->
         # separate ledger, matches the delta the Dedicated strategy
         # accounts table already computes client-side today.
         "realized_pnl": float(row.current_balance) - float(row.starting_balance),
-        "unrealized_pnl": _unrealized_pnl(db, open_positions, token),
+        # live=False skips the quote fetch (a slow upstream, one account at a time): 0.0, as when no quote arrives.
+        "unrealized_pnl": _unrealized_pnl(db, open_positions, token) if live else 0.0,
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
@@ -152,7 +153,7 @@ def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) ->
 
 
 @router.get("/accounts")
-def list_accounts(book: str = Book, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_accounts(book: str = Book, with_unrealized: bool = True, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """One row per segment - always exactly NSE/MCX/CRYPTO, one per SaaS
     user (created lazily with sensible defaults - see load_account - the
     first time each is touched, so a brand-new signup always sees all 3
@@ -161,7 +162,7 @@ def list_accounts(book: str = Book, user: User = Depends(get_current_user), db: 
     # A positional hold is spot only and commodities have no spot, so there is no positional account to create (or show) for MCX.
     segments = [s for s in _SEGMENTS if not (book == "positional" and s == "MCX")]
     rows = {seg: load_account(db, user.id, seg, book) for seg in segments}
-    return [_to_out(db, rows[s], token=user.token) for s in segments if rows[s] is not None]
+    return [_to_out(db, rows[s], token=user.token, live=with_unrealized) for s in segments if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")

@@ -14,6 +14,7 @@ from app.api.routes import (
     saved_backtests,
     signals,
     strategies,
+    favorites,
     watchlists,
     weekly_advisor,
     webhooks,
@@ -58,6 +59,7 @@ app.include_router(signals.router)
 app.include_router(strategies.router)
 app.include_router(analysis.router)
 app.include_router(fundamentals.router)
+app.include_router(favorites.router)
 app.include_router(watchlists.router)
 app.include_router(weekly_advisor.router)
 app.include_router(webhooks.router)

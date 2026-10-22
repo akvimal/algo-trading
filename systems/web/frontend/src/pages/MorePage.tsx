@@ -131,17 +131,20 @@ export function MorePage() {
           )}
         </div>
       )}
-      <div className="card">
+      <div className="card more-phone-only">
         <LinkRow to="/markets" title="Markets" hint="Pre-market bias, headlines, the calendar and open interest" />
       </div>
-      <div className="card">
+      <div className="card more-phone-only">
         <LinkRow to="/performance" title="Performance" hint="Equity, results, discipline and the review of your closed trades" />
       </div>
-      <div className="card">
+      <div className="card more-phone-only">
         <LinkRow to="/learn" title="Learn" hint="Are you ready for live trading, which habit to fix next, and the path from the basics" />
       </div>
-      <div className="card">
+      <div className="card more-phone-only">
         <LinkRow to="/more/settings" title="Settings" hint="Risk limits, your Dhan connection and live trading" />
+      </div>
+      <div className="card">
+        <LinkRow to="/scan?tab=reads" title="Saved stock reads" hint="The AI business read of every stock you have analysed, to look up again" />
       </div>
       <div className="card">
         <LinkRow to="/more/alerts" title="Price alerts" hint="Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed" />

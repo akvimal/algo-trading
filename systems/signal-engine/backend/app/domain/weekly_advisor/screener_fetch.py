@@ -297,6 +297,39 @@ def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None, forc
         db.close()
 
 
+def get_stored(symbol: str) -> Optional[FundamentalAnalysis]:
+    """The stored AI read exactly as it is, however old: never captures, never calls a model (unlike get_fundamentals, which
+    re-captures past its cache TTL). None when there is no read yet, or the stored page was never read successfully."""
+    db = SessionLocal()
+    try:
+        row = db.get(db_models.WeeklyAdvisorFundamentals, symbol)
+        return _row_to_analysis(row) if row is not None and row.bias is not None else None
+    finally:
+        db.close()
+
+
+def list_stored() -> list[FundamentalAnalysis]:
+    """Every stored read, newest first (the screenshot column is left unloaded: it is large and not needed here)."""
+    db = SessionLocal()
+    try:
+        cols = db_models.WeeklyAdvisorFundamentals
+        rows = (
+            db.query(cols.symbol, cols.bias, cols.confidence, cols.summary, cols.pros, cols.cons, cols.reasons, cols.fetched_at)
+            .filter(cols.bias.isnot(None))
+            .order_by(cols.fetched_at.desc())
+            .all()
+        )
+        return [
+            FundamentalAnalysis(
+                symbol=r.symbol, bias=r.bias, confidence=float(r.confidence) if r.confidence is not None else None, summary=r.summary,
+                pros=r.pros or [], cons=r.cons or [], reasons=r.reasons or [], fetched_at=r.fetched_at,
+            )
+            for r in rows
+        ]
+    finally:
+        db.close()
+
+
 def has_cached(symbol: str) -> bool:
     """Whether a screenshot for this symbol is already stored (so an AI read can be made from it without opening a browser)."""
     db = SessionLocal()

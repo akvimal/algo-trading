@@ -1,3 +1,6 @@
+import { AnalysisPanel } from "./AnalysisPanel";
+import { StockActions } from "./StockActions";
+import { isStockSymbol } from "./analysisModel";
 import { NextStep } from "./nav";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
@@ -354,6 +357,15 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
 
       <TicketStep n={1} title="Study" summary={studySummary} tone={studyTone} open={step === 1} onToggle={() => setStep(step === 1 ? 2 : 1)} testId="step-study">
       {studyTop}
+      {stock && isStockSymbol(ctx.symbol, ctx.segment) && (
+        <>
+          <div className="row" style={{ justifyContent: "flex-start", margin: "4px 0" }}>
+            <strong>{ctx.symbol}</strong>
+            <StockActions symbol={ctx.symbol} />
+          </div>
+          <AnalysisPanel symbol={ctx.symbol} auto />
+        </>
+      )}
       {(
         <>
         <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>

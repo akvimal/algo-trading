@@ -24,8 +24,12 @@ const intervalLabel = (v: string): string => INTERVALS.find((i) => i.value === v
 /** Plain "SYMBOL + SYMBOL" when the two sides differ - the symbols alone already tell them apart.
  * Same symbol on both sides only makes sense at two different intervals (that's the whole point
  * of saving it), so the label names both: "NIFTY 5m + NIFTY 1h", not an ambiguous "NIFTY + NIFTY". */
-export const comboLabel = (a: ComboSide, b: ComboSide): string =>
-  a.symbol === b.symbol && a.interval !== b.interval ? `${a.symbol} ${intervalLabel(a.interval)} + ${b.symbol} ${intervalLabel(b.interval)}` : `${a.symbol} + ${b.symbol}`;
+export const comboLabel = (a: ComboSide, b: ComboSide): string => {
+  // Intervals are named whenever they are not the default on both sides, so NIFTY 15m + BANKNIFTY 15m
+  // and NIFTY 3m + BANKNIFTY 3m (same symbols, different saved combos) read differently in the menu.
+  const named = a.symbol === b.symbol ? a.interval !== b.interval : a.interval !== DEFAULT_INTERVAL || b.interval !== DEFAULT_INTERVAL;
+  return named ? `${a.symbol} ${intervalLabel(a.interval)} + ${b.symbol} ${intervalLabel(b.interval)}` : `${a.symbol} + ${b.symbol}`;
+};
 
 /** Same instrument, same interval, on both sides - not a real combo (there is nothing to
  * compare), and the CombosMenu's own "+ Save" offer is gated on this. */

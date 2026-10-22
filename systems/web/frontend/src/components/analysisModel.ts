@@ -39,3 +39,7 @@ export function ladder(a: Pick<StockAnalysis, "price" | "technical">): LadderRow
   const below = [...a.technical.support].sort((x, y) => y.high - x.high).map<LadderRow>((l) => ({ kind: "support", low: l.low, high: l.high, label: `${l.timeframe} support`, distancePct: -l.distance_pct }));
   return [...above, { kind: "price", low: a.price, high: a.price, label: "Price now", distancePct: null }, ...below];
 }
+
+/** Indexes have no company page to read: the business half of an analysis is only for a listed stock. */
+const INDEX_SYMBOLS = new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"]);
+export const isStockSymbol = (symbol: string, segment: string = "NSE"): boolean => segment === "NSE" && !INDEX_SYMBOLS.has(symbol.toUpperCase());

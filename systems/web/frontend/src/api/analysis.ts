@@ -1,5 +1,5 @@
 import { SERVICE_URLS } from "../config";
-import { api } from "./http";
+import { ApiError, api } from "./http";
 
 export type Bias = "bullish" | "bearish" | "neutral";
 export type Agreement = "aligned" | "mixed" | "conflicting" | "technical_only";
@@ -37,3 +37,19 @@ export const getAnalysis = (symbol: string, refresh = false) => api<StockAnalysi
 
 /** The picture the AI read, for checking it (public: the browser loads it as a plain link). */
 export const screenshotUrl = (symbol: string) => `${SERVICE_URLS.signalEngine}/weekly-advisor/fundamentals/${encodeURIComponent(symbol)}/screenshot`;
+
+/** What is already stored for a stock, with no capture and no model call (so it is instant and costs nothing); null when nothing is stored yet. */
+export async function getStoredAnalysis(symbol: string): Promise<StockAnalysis | null> {
+  try {
+    return await api<StockAnalysis>("signalEngine", `/analysis/${encodeURIComponent(symbol)}?cached_only=true`);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/** One stock's stored business read, as the saved-reads list shows it. */
+export type SavedRead = { symbol: string; bias: Bias; confidence: number | null; summary: string | null; pros: string[]; cons: string[]; fetched_at: string | null };
+
+/** Every stock that already has a stored read, newest first (free: nothing is captured or sent to a model). */
+export const listSavedReads = () => api<SavedRead[]>("signalEngine", "/fundamentals");

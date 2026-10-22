@@ -635,3 +635,11 @@ CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_fundamentals (
 ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS created_by UUID;
 CREATE INDEX IF NOT EXISTS idx_weekly_advisor_recommendations_created_by
     ON signal_generation.weekly_advisor_recommendations (created_by);
+
+-- A person's favourite stocks (2026-10-21); see migrations/069-favorites.sql.
+CREATE TABLE IF NOT EXISTS signal_generation.favorites (
+    owner      UUID NOT NULL,
+    symbol     TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner, symbol)
+);

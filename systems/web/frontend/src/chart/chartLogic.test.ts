@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChartStructure } from "../api/types";
 import { fractionalIndexToTs, floorBarIndex, pointTimestamp, toChartPoint, tsToFractionalIndex } from "./anchor";
 import {
-  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
+  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure, loadStructures, STRUCTURE_KEY_B,
   loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawingDefault, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toggleStructureOn, toKLine,
 } from "./config";
 import { rollLiveBar, type Bar } from "./liveBar";
@@ -121,6 +121,16 @@ describe("saved chart settings", () => {
     expect(loadStructure()).toMatchObject({ tfs: ["15min", "60min"], breakers: true, breaks: true, setups: true });
     localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["15min", "7min", 3] }));
     expect(loadStructure().tfs).toEqual(["15min"]);
+  });
+
+  it("the two charts each keep their own structure; the second starts as a copy of the first", () => {
+    const first = { tfs: ["15min"], breakers: true, fvg: false, breaks: false, trendMarks: false, setups: false };
+    saveStructure(first);
+    const [a, b] = loadStructures();
+    expect(b).toEqual(a);
+    expect(b.tfs).not.toBe(a.tfs); // a copy, not the same list
+    saveStructure({ ...first, tfs: ["3min"] }, STRUCTURE_KEY_B);
+    expect(loadStructures().map((s) => s.tfs)).toEqual([["15min"], ["3min"]]);
   });
 
   describe("resetStructureForInterval", () => {

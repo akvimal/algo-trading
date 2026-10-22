@@ -24,12 +24,14 @@ const BOOKS: { id: Book; label: string }[] = [
   { id: "positional", label: "Positional" },
 ];
 
-async function loadToday() {
+// `live` asks for each open position's current result, which waits on market quotes and is the slow part of this
+// page: the first paint uses the quick form (stored values), and the polled live form replaces it when it arrives.
+async function loadToday(live: boolean) {
   const [accounts, positionalAccounts, positions, groups, waiting] = await Promise.all([
-    api<Account[]>("execution", "/accounts"),
-    api<Account[]>("execution", "/accounts?book=positional").catch(() => [] as Account[]),
-    positionsApi("/positions?with_live_pnl=true&limit=200"),
-    groupsApi("/option-groups?with_live_pnl=true&limit=200"),
+    api<Account[]>("execution", `/accounts${live ? "" : "?with_unrealized=false"}`),
+    api<Account[]>("execution", `/accounts?book=positional${live ? "" : "&with_unrealized=false"}`).catch(() => [] as Account[]),
+    positionsApi(`/positions?${live ? "with_live_pnl=true&" : ""}limit=200`),
+    groupsApi(`/option-groups?${live ? "with_live_pnl=true&" : ""}limit=200`),
     listWaitingOrders().catch(() => [] as PendingOrder[]),
   ]);
   return { accounts, positionalAccounts, positions, groups, waiting };
@@ -38,7 +40,17 @@ async function loadToday() {
 export function TodayPage() {
   const [book, setBook] = useState<Book>("intraday");
   const { guided, markets } = useProfile();
-  const today = useResource(loadToday, [], { pollMs: POLL_MS });
+  const quick = useResource(() => loadToday(false), []);
+  const livePoll = useResource(() => loadToday(true), [], { pollMs: POLL_MS });
+  const today = {
+    data: livePoll.data ?? quick.data,
+    error: livePoll.data || quick.data ? livePoll.error : livePoll.error ?? quick.error,
+    loading: livePoll.loading && quick.loading,
+    reload: () => {
+      quick.reload();
+      livePoll.reload();
+    },
+  };
   const grids = useSessionGrids();
   // A tapped closed trade opens its summary over the page (an open one goes to Portfolio); "waiting" opens the orders that have not filled yet.
   const [picked, setPicked] = useState<TapeTrade | null>(null);

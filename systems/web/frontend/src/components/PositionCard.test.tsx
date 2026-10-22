@@ -35,6 +35,9 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      // The card's quiet look-ups (a stored AI read, the favourites behind its star) are not the actions under test.
+      if (url.includes("/analysis/")) return json({ detail: "none" }, 404);
+      if (url.includes("/favorites")) return json([]);
       calls.push({ method, url, body });
       if (method === "PUT") return moveFails ? json({ detail: "The stop-loss has to stay below the current price." }, 422) : json({ ok: true });
       if (url.includes("/square-off")) return squareOffFails ? json({ detail: "Could not reach the broker." }, 502) : json({ ok: true });
@@ -259,8 +262,10 @@ describe("the trade journal notes", () => {
 
   it("shows the trade's history of stop and target moves with their notes", async () => {
     const user = userEvent.setup();
-    vi.mocked(fetch).mockImplementationOnce(async () =>
-      json([{ id: "e1", field: "stop_loss", move: "tighten", source: "user", accepted: true, old_price: 980, new_price: 990, refused_reason: null, note: "locking profit", created_at: "2026-09-28T05:00:00Z" }]),
+    // Keyed on the URL: the card's own quiet look-up of a stored AI read goes out first and would take a one-shot mock.
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: any, init?: any) =>
+      String(url).includes("/events") ? json([{ id: "e1", field: "stop_loss", move: "tighten", source: "user", accepted: true, old_price: 980, new_price: 990, refused_reason: null, note: "locking profit", created_at: "2026-09-28T05:00:00Z" }]) : real(url, init),
     );
     render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
     await user.click(screen.getByRole("button", { name: "History" }));

@@ -106,3 +106,10 @@ def get_stock_fundamentals(symbol: str, refresh: bool = Query(default=False), ca
     except FundamentalsProblem as p:
         raise HTTPException(status_code=p.status_code, detail=p.detail, headers={"X-Error-Code": p.code} if p.code else None)
     return _to_out(analysis, refreshed)
+
+
+@router.get("/fundamentals", response_model=list[FundamentalsOut])
+def list_stored_fundamentals(caller: Caller = Depends(get_caller)):
+    """Every stock that already has a stored AI read, newest first: a reference list that costs nothing (no capture, no model call).
+    The reads are shared across people, like the cache they come from."""
+    return [_to_out(a, False) for a in screener_fetch.list_stored()]

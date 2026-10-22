@@ -172,20 +172,20 @@ def env(monkeypatch):
 
 
 def test_the_route_returns_the_combined_read(env):
-    out = route.get_stock_analysis("reliance", refresh=False, caller=ME)
+    out = route.get_stock_analysis("reliance", refresh=False, cached_only=False, caller=ME)
     assert out.symbol == "RELIANCE" and out.verdict.agreement == "aligned"
     assert env["calls"][0] == ("read", "RELIANCE", "key", False)
 
 
 def test_with_no_key_the_chart_still_comes_back_and_points_to_settings(env):
     env["problem"] = route.FundamentalsProblem(409, "needs a key", "openrouter_key_required")
-    out = route.get_stock_analysis("RELIANCE", refresh=False, caller=ME)
+    out = route.get_stock_analysis("RELIANCE", refresh=False, cached_only=False, caller=ME)
     assert out.fundamental.available is False and out.fundamental.needs_key is True and out.fundamental.note == "needs a key"
 
 
 def test_a_page_that_could_not_be_read_is_a_note_not_an_error(env):
     env["problem"] = route.FundamentalsProblem(503, "could not read screener.in")
-    out = route.get_stock_analysis("RELIANCE", refresh=False, caller=ME)
+    out = route.get_stock_analysis("RELIANCE", refresh=False, cached_only=False, caller=ME)
     assert out.fundamental.available is False and out.fundamental.needs_key is False and "screener.in" in out.fundamental.note
 
 
@@ -195,7 +195,7 @@ def test_too_little_history_is_a_clear_refusal(env, monkeypatch):
 
     monkeypatch.setattr(route, "analyze_stock", short)
     with pytest.raises(HTTPException) as e:
-        route.get_stock_analysis("NEWLISTING", refresh=False, caller=ME)
+        route.get_stock_analysis("NEWLISTING", refresh=False, cached_only=False, caller=ME)
     assert e.value.status_code == 422 and "too little" in e.value.detail
 
 
@@ -205,11 +205,11 @@ def test_a_market_data_failure_is_a_bad_gateway(env, monkeypatch):
 
     monkeypatch.setattr(route, "analyze_stock", boom)
     with pytest.raises(HTTPException) as e:
-        route.get_stock_analysis("RELIANCE", refresh=False, caller=ME)
+        route.get_stock_analysis("RELIANCE", refresh=False, cached_only=False, caller=ME)
     assert e.value.status_code == 502
 
 
 def test_a_bad_symbol_is_refused_before_anything_is_fetched(env):
     with pytest.raises(HTTPException) as e:
-        route.get_stock_analysis("../etc", refresh=False, caller=ME)
+        route.get_stock_analysis("../etc", refresh=False, cached_only=False, caller=ME)
     assert e.value.status_code == 422 and env["calls"] == []

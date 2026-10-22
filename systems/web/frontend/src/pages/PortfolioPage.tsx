@@ -108,23 +108,25 @@ function BookPage({ view }: { view: View }) {
       ) : (
         <LinkRow to={`/portfolio?segment=${segment}`} title="Positions and history" hint="What you hold and what you have traded" />
       )}
-      <div className="chips" role="group" aria-label="Account">
-        {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
-          <button key={s} aria-pressed={segment === s} onClick={() => set({ segment: s })}>
-            {SEGMENT_LABEL[s]}
-          </button>
-        ))}
-      </div>
-      {segment !== "MCX" && (
-        <div className="chips" role="group" aria-label="Book">
-          <button aria-pressed={book === "intraday"} onClick={() => set({ book: "intraday" })}>
-            Everyday
-          </button>
-          <button aria-pressed={book === "positional"} onClick={() => set({ book: "positional" })}>
-            Positional
-          </button>
+      <div className="chip-bar">
+        <div className="chips" role="group" aria-label="Account">
+          {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
+            <button key={s} aria-pressed={segment === s} onClick={() => set({ segment: s })}>
+              {SEGMENT_LABEL[s]}
+            </button>
+          ))}
         </div>
-      )}
+        {segment !== "MCX" && (
+          <div className="chips" role="group" aria-label="Book">
+            <button aria-pressed={book === "intraday"} onClick={() => set({ book: "intraday" })}>
+              Everyday
+            </button>
+            <button aria-pressed={book === "positional"} onClick={() => set({ book: "positional" })}>
+              Positional
+            </button>
+          </div>
+        )}
+      </div>
       <div className="chips" role="tablist" aria-label={view === "portfolio" ? "Portfolio sections" : "Performance sections"}>
         {viewTabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => set({ tab: t.id })}>

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.routes.fundamentals import FundamentalsProblem, caller_key, read_fundamentals, valid_symbol
 from app.auth import Caller, get_caller
+from app.domain.weekly_advisor import screener_fetch
 from app.domain.stock_analysis import NotEnoughHistory, StockAnalysis, analyze_stock
 
 logger = logging.getLogger(__name__)
@@ -20,15 +21,22 @@ router = APIRouter()
 
 
 @router.get("/analysis/{symbol}", response_model=StockAnalysis)
-def get_stock_analysis(symbol: str, refresh: bool = Query(default=False), caller: Caller = Depends(get_caller)):
+def get_stock_analysis(symbol: str, refresh: bool = Query(default=False), cached_only: bool = Query(default=False), caller: Caller = Depends(get_caller)):
     sym = valid_symbol(symbol)
     fundamentals = None
     note: Optional[str] = None
     needs_key = False
-    try:
-        fundamentals, _ = read_fundamentals(sym, caller_key(caller), refresh)
-    except FundamentalsProblem as p:
-        note, needs_key = p.detail, p.code is not None
+    if cached_only:
+        # Only what is already stored: no capture, no model call, no key needed. 404 (not an empty analysis) when there is none,
+        # so a page can show it automatically where one exists and a button where it does not.
+        fundamentals = screener_fetch.get_stored(sym)
+        if fundamentals is None:
+            raise HTTPException(status_code=404, detail="no stored read for this stock")
+    else:
+        try:
+            fundamentals, _ = read_fundamentals(sym, caller_key(caller), refresh)
+        except FundamentalsProblem as p:
+            note, needs_key = p.detail, p.code is not None
     try:
         return analyze_stock(sym, fundamentals, note, needs_key=needs_key)
     except NotEnoughHistory as exc:

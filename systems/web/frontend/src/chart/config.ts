@@ -169,8 +169,8 @@ export type StructureConfig = {
 export const EMPTY_STRUCTURE: StructureConfig = { tfs: [], breakers: false, fvg: false, breaks: false, trendMarks: false, setups: false };
 
 /** Off by default: an opt-in analytical layer, and each timeframe costs one extra download. */
-export function loadStructure(): StructureConfig {
-  const raw = read<Record<string, unknown>>("structure", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
+export function loadStructure(key: string = "structure"): StructureConfig {
+  const raw = read<Record<string, unknown>>(key, {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
   return {
     tfs: Array.isArray(raw.tfs) ? raw.tfs.filter((t): t is string => typeof t === "string" && STRUCTURE_TF_VALUES.has(t)) : [],
     breakers: raw.breakers === true,
@@ -180,7 +180,21 @@ export function loadStructure(): StructureConfig {
     setups: raw.setups === true,
   };
 }
-export const saveStructure = (s: StructureConfig) => write("structure", s);
+export const saveStructure = (s: StructureConfig, key: string = "structure") => write(key, s);
+
+/** Each of the two charts has its own structure selection (detection timeframes and layers). The second chart's is stored apart; a person who
+ * has never set one gets a copy of the first's, so the two charts start out as they always were and only drift apart when they are changed. */
+export const STRUCTURE_KEY_B = "structureB";
+export function loadStructures(): [StructureConfig, StructureConfig] {
+  const a = loadStructure();
+  let hasB = false;
+  try {
+    hasB = localStorage.getItem(`web.chart.${STRUCTURE_KEY_B}`) != null;
+  } catch {
+    // storage blocked: the second chart simply starts as a copy
+  }
+  return [a, hasB ? loadStructure(STRUCTURE_KEY_B) : { ...a, tfs: [...a.tfs] }];
+}
 
 export const structureIsOn = (s: StructureConfig) => s.tfs.length > 0;
 

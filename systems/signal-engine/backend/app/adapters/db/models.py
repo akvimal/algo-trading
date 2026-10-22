@@ -287,3 +287,15 @@ class WeeklyAdvisorFundamentals(Base):
     reasons = Column(JSONB)
     ai_model = Column(Text)
     analyzed_at = Column(TIMESTAMP(timezone=True))
+
+
+class Favorite(Base):
+    """One stock a person has starred. Personal (never shared, an admin sees only their own); see
+    infra/postgres/migrations/069-favorites.sql. `owner` is the caller's id, or the all-zero id when sign-in is not enforced."""
+
+    __tablename__ = "favorites"
+    __table_args__ = {"schema": SCHEMA}
+
+    owner = Column(UUID(as_uuid=True), primary_key=True)
+    symbol = Column(Text, primary_key=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

@@ -7,7 +7,7 @@ import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel, 
 import type { OptionGroup, Position, Pretrade, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
-import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
+import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructures, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, STRUCTURE_KEY_B, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
 import { AnalysisTools } from "../chart/AnalysisTools";
@@ -107,13 +107,16 @@ export function TradePage() {
   // ---- what the person has switched on the charts (shared by both) ----
   const [indicators, setIndicators] = useState<string[]>(() => loadIndicators());
   const [indicatorParams, setIndicatorParams] = useState<Record<string, number[]>>(() => loadIndicatorParams());
-  const [structure, setStructure] = useState<StructureConfig>(() => loadStructure());
+  // Structure is per chart: each of the two has its own detection timeframes and layers. `structure` / `setStructure` below are the ACTIVE chart's
+  // (what the Structure menu and the setups list work on); each chart is drawn with its own.
+  const [structures, setStructures] = useState<[StructureConfig, StructureConfig]>(() => loadStructures());
   const [tools, setTools] = useState(() => loadTools());
   // Phone only: the chart moves up and down the price scale under a finger; off, the scale fits the candles on screen.
   const [pricePanOn, setPricePanOn] = useState(true);
   useEffect(() => saveIndicators(indicators), [indicators]);
   useEffect(() => saveIndicatorParams(indicatorParams), [indicatorParams]);
-  useEffect(() => saveStructure(structure), [structure]);
+  useEffect(() => saveStructure(structures[0]), [structures]);
+  useEffect(() => saveStructure(structures[1], STRUCTURE_KEY_B), [structures]);
   useEffect(() => saveTools(tools), [tools]);
 
   // ---- data per chart ----
@@ -122,6 +125,13 @@ export function TradePage() {
   const [maximized, setMaximized] = useState<0 | 1 | null>(null);
   const focus = twoUp ? maximized : null;
   const active = (twoUp ? (focus ?? ws.active) : 0) as 0 | 1;
+  const structure = structures[active];
+  const setStructure = (next: StructureConfig | ((cur: StructureConfig) => StructureConfig)) =>
+    setStructures((cur) => {
+      const out: [StructureConfig, StructureConfig] = [cur[0], cur[1]];
+      out[active] = typeof next === "function" ? next(cur[active]) : next;
+      return out;
+    });
   const setStructureOn = (on: boolean) => setStructure((s) => ({ ...s, tfs: toggleStructureOn(on, ws.panes[active].interval) }));
   const [socketUp, setSocketUp] = useState(false);
   const dataA = usePaneData(ws.panes[0], true, socketUp);
@@ -791,7 +801,13 @@ export function TradePage() {
                   interval={spec.interval}
                   onInterval={(iv) => {
                     setWs((cur) => setPaneInterval(cur, i, iv));
-                    setStructure((cur) => ({ ...cur, tfs: resetStructureForInterval(cur.tfs, iv) }));
+                    // That chart's own selection follows its size; with the sizes linked the other chart's size changes too, so its selection does as well.
+                    const linked = twoUp && ws.links.interval;
+                    setStructures((cur) => {
+                      const out: [StructureConfig, StructureConfig] = [cur[0], cur[1]];
+                      for (const k of linked ? [0, 1] : [i]) out[k] = { ...cur[k], tfs: resetStructureForInterval(cur[k].tfs, iv) };
+                      return out;
+                    });
                   }}
                   price={priceOf(i)}
                   priceShown={!tools.priceHidden}
@@ -827,7 +843,7 @@ export function TradePage() {
                       indicators={indicators}
                       indicatorParams={indicatorParams}
                       indicatorsHidden={tools.indicatorsHidden}
-                      structure={structure}
+                      structure={structures[i]}
                       plan={active === i ? plan : []}
                       trades={chartTrades[i]}
                       levels={chartLevels[i]}

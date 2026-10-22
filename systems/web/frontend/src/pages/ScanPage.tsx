@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
 import { AnalysisPanel } from "../components/AnalysisPanel";
+import { SavedReads } from "../components/SavedReads";
+import { StockActions } from "../components/StockActions";
+import { WatchlistView } from "../components/WatchlistView";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
 import type { Activity, ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
@@ -24,6 +27,8 @@ const TABS = [
   { id: "oi", label: "OI buildup" },
   { id: "screener", label: "Screener" },
   { id: "custom", label: "Custom" },
+  { id: "watchlist", label: "Watchlist" },
+  { id: "reads", label: "Saved reads" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 const parseTab = (v: string | null): TabId => (TABS.some((t) => t.id === v) ? (v as TabId) : "oi");
@@ -42,7 +47,7 @@ export function ScanPage() {
           </button>
         ))}
       </div>
-      {tab === "oi" ? <OiScan /> : tab === "screener" ? <ScreenerScan /> : <CustomScreenScan />}
+      {tab === "oi" ? <OiScan /> : tab === "screener" ? <ScreenerScan /> : tab === "watchlist" ? <WatchlistView /> : tab === "reads" ? <SavedReads /> : <CustomScreenScan />}
       <p className="faint" style={{ fontSize: 12 }}>
         End-of-day readings for information only. They are not recommendations to buy or sell. Live OI and the Weekly Advisor aren't available here yet.
       </p>
@@ -400,6 +405,7 @@ function OiCard({
       <div className="row">
         <strong>
           {r.symbol}
+          <StockActions symbol={r.symbol} />
           <TradePills s={trade} />
           {(() => {
             const signal = oiSignal(r, minShift);
@@ -627,6 +633,7 @@ function ScreenerCard({
       <div className="row">
         <strong>
           {r.symbol}
+          <StockActions symbol={r.symbol} />
           <TradePills s={trade} />
         </strong>
         <span className="num">{formatPrice(r.close)}</span>
@@ -861,6 +868,7 @@ function CustomScreenScan() {
                     <div className="row">
                       <strong>
                         {m.symbol}
+                        <StockActions symbol={m.symbol} />
                         <TradePills s={statusOf(trades.map, m.symbol)} />
                       </strong>
                       <span className="num">{formatPrice(m.close)}</span>

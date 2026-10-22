@@ -1,3 +1,6 @@
+import { AnalysisPanel } from "./AnalysisPanel";
+import { StockActions } from "./StockActions";
+import { isStockSymbol } from "./analysisModel";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/http";
 import { listTradeEvents, moveOpenLevel, setAutoTrail, squareOffPosition, type TradeEvent } from "../api/trade";
@@ -226,7 +229,7 @@ export function PositionCard(props: Props) {
     <div className={`card pos ${compact ? "pos-compact" : ""}`} data-testid="position-card">
       <div className="pos-head">
         <strong>
-          {title} <span className={`pill ${side === "BUY" ? "up" : "dn"}`}>{side}</span>
+          {title}{p && isStockSymbol(p.symbol, p.segment) && <StockActions symbol={p.symbol} />} <span className={`pill ${side === "BUY" ? "up" : "dn"}`}>{side}</span>
           {g && <span className="pill">Option</span>}
         </strong>
         <Signed value={pnl} text={pnl == null ? "–" : formatPnl(pnl)} />
@@ -390,6 +393,7 @@ export function PositionCard(props: Props) {
           capture={props.snapshotCapture}
         />
       )}
+      {p && isStockSymbol(p.symbol, p.segment) && <AnalysisPanel symbol={p.symbol} auto quiet />}
       {chartOpen && g && !props.chart && (
         <div style={{ marginTop: 12 }}>
           <ScanChartPanel exchange={g.segment ?? "NSE"} symbol={g.underlying_symbol} />

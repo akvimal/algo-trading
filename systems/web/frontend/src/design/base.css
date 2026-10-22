@@ -3612,3 +3612,28 @@ a.tape-dot {
   padding-left: 0;
   border-left: 0;
 }
+
+/* Account and Book chips share one row (wrapping on a narrow screen), a divider between the groups. */
+.chip-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.chip-bar .chips + .chips {
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+@media (max-width: 520px) {
+  .chip-bar .chips + .chips {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* More lists what the desktop sidebar already has (Settings, Markets, Performance, Learn) only on a phone, where the bottom bar has no room. */
+@media (min-width: 900px) {
+  .more-phone-only {
+    display: none;
+  }
+}

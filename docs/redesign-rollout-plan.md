@@ -120,12 +120,12 @@ Remaining in Phase 2: retiring the classic frontends; email verification and pas
 
 ## Where the new frontend lives (decided 2026-09-25)
 
-**In this repo, as a new frontend-only system: `systems/web/frontend`.** Not a separate project. It follows the precedent of `systems/manual-trading` (a frontend with no backend of its own, talking to the backends over HTTP only), so the "no imports between `systems/*`" rule is unaffected. Deploy it as a new docker-compose service behind Caddy, next to the existing shell.
+**In this repo, as a new frontend-only system: `systems/web/frontend`.** Not a separate project. It follows the precedent of `systems/manual-trading` (a frontend with no backend of its own, talking to the backends over HTTP only), so the "no imports between `systems/*`" rule is unaffected. Deploy it as a new docker-compose service behind the shared edge Caddy (separate `edge-caddy` repo), next to the existing shell.
 
 Why in-repo:
 - Phase 0 and 1 change API shapes and the screens that use them (server-side risk enforcement, graduation gate, equity history, pending orders). One repo means one commit and one review per change, instead of coordinating two releases.
 - API types are hand-mirrored today, with no codegen, and `contract-guardian` only watches this repo. A split would raise drift risk for a solo developer.
-- The gradual migration needs the new app beside the old iframe shell, behind the same Caddy setup and sharing the same login, until every screen is ported. One compose file and one deploy make that simple.
+- The gradual migration needs the new app beside the old iframe shell, behind the same edge Caddy and sharing the same login, until every screen is ported. One compose file and one deploy make that simple.
 - `CLAUDE.md`, `docs/architecture.md`, this plan, the mockup source and the main/dev/prod workflow already live here.
 
 Two things to do from day one so the in-repo choice pays off:

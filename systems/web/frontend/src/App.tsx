@@ -8,6 +8,7 @@ import { InboxPage } from "./pages/InboxPage";
 import { LearnPage } from "./pages/LearnPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { JobsPage } from "./pages/JobsPage";
+import { HolidaysPage } from "./pages/HolidaysPage";
 import { MorePage } from "./pages/MorePage";
 import { MarketsPage } from "./pages/MarketsPage";
 import { PerformancePage, PortfolioPage } from "./pages/PortfolioPage";
@@ -80,6 +81,7 @@ export function App() {
             <Route path="strategies" element={<StrategiesPage />} />
             <Route path="swing-shadow" element={<SwingShadowPage />} />
             <Route path="jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
+            <Route path="holidays" element={<RequireAdmin><HolidaysPage /></RequireAdmin>} />
             <Route path="ai-models" element={<RequireAdmin><AiModelsPage /></RequireAdmin>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

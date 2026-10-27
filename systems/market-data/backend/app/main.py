@@ -12,6 +12,7 @@ from app.api.routes import (
     dhan,
     equity_screener,
     health,
+    holidays,
     ideas,
     instruments,
     jobs,
@@ -63,6 +64,7 @@ app.include_router(delta.router)
 app.include_router(options.router)
 app.include_router(oi_buildup.router)
 app.include_router(jobs.router)
+app.include_router(holidays.router)
 app.include_router(equity_screener.router)
 app.include_router(custom_screens.router)
 app.include_router(news.router)

@@ -70,4 +70,5 @@
 065-trade-review-mistakes.sql|execution.positions|root_cause
 066-inbox.sql|execution.inbox_items|
 067-pending-entry-context.sql|execution.pending_orders|entry_context
+068-market-holidays.sql|market_data.market_holidays|
 069-favorites.sql|signal_generation.favorites|

@@ -486,3 +486,13 @@ CREATE TABLE IF NOT EXISTS market_data.oi_swing_shadow (
 );
 CREATE INDEX IF NOT EXISTS idx_oi_swing_shadow_date ON market_data.oi_swing_shadow (snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_oi_swing_shadow_open ON market_data.oi_swing_shadow (snapshot_date) WHERE result IS NULL;
+
+-- Admin-maintained exchange holidays, layered over app/data/india_calendar.json (migration 068).
+CREATE TABLE IF NOT EXISTS market_data.market_holidays (
+    holiday_date  DATE PRIMARY KEY,
+    name          TEXT NOT NULL,
+    nse           TEXT NOT NULL DEFAULT 'closed' CHECK (nse IN ('closed', 'special', 'open')),
+    mcx           TEXT NOT NULL DEFAULT 'closed' CHECK (mcx IN ('closed', 'morning_closed', 'special', 'open')),
+    detail        TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

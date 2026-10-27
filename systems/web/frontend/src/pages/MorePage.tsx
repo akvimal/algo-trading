@@ -166,6 +166,11 @@ export function MorePage() {
           <LinkRow to="/more/jobs" title="Background jobs" hint="The nightly snapshots and other scheduled jobs: running now, last run, next run" />
         </div>
       )}
+      {session?.isAdmin && (
+        <div className="card">
+          <LinkRow to="/more/holidays" title="Exchange holidays" hint="The days the nightly OI snapshot skips: add next year's, or fix a date" />
+        </div>
+      )}
     </div>
   );
 }

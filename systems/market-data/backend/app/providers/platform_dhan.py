@@ -59,6 +59,11 @@ def refresh_from_accounts(now: Optional[datetime] = None) -> dict:
         token, client_id = data["dhan_access_token"], data["dhan_client_id"]
         current = current_access_token()
         if token == current:
+            if client_id and client_id != settings.dhan_client_id:
+                # Same token, corrected Client ID (e.g. a wrongly saved one was fixed in Settings): the token check alone would never pick it up.
+                set_manual_credentials(client_id, token)
+                logger.info("platform Dhan: adopted the Client ID saved in Settings (token unchanged)")
+                return {"adopted": True, "reason": "now using the Client ID saved in Settings"}
             return {"adopted": False, "reason": "the token in use is already the one saved in Settings"}
         new_exp = _decode_jwt_exp(token)
         cur_exp = _decode_jwt_exp(current) if current else None

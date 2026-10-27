@@ -108,6 +108,21 @@ class AlertChannel(Base):
     zone_alerts = Column(Text, nullable=False, default="all", server_default="all")  # all | close | off - see migration 049
 
 
+class MarketHoliday(Base):
+    """An exchange holiday an admin maintains (migration 068), layered over app/data/india_calendar.json by
+    app/domain/market_calendar.py: the same date here wins over the file, and nse='open' removes a holiday the file lists."""
+
+    __tablename__ = "market_holidays"
+    __table_args__ = {"schema": SCHEMA}
+
+    holiday_date = Column(Date, primary_key=True)
+    name = Column(Text, nullable=False)
+    nse = Column(Text, nullable=False, default="closed", server_default="closed")
+    mcx = Column(Text, nullable=False, default="closed", server_default="closed")
+    detail = Column(Text)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class OiEodSnapshot(Base):
     """One row per (symbol, snapshot_date) - the EOD OI-buildup screener's
     own persisted history, written once per trading day by

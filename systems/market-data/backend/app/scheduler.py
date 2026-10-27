@@ -15,6 +15,7 @@ from app.config import settings
 from app.domain import job_tracker
 from app.domain.dhan_retry import dhan_retry_delay
 from app.domain.job_tracker import tracked
+from app.domain import market_calendar as mc
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.models import Candle
 from app.domain.oi_buildup import EodActivityResult, PreviousSnapshot, compute_eod_activity, compute_eod_buildup
@@ -304,6 +305,13 @@ def _record_oi_eod_snapshot() -> None:
         logger.info("scheduled OI EOD snapshot: skipped, weekend")
         run.skip("weekend")
         return
+    from app.domain.market_calendar import is_nse_closed
+
+    # A holiday row would carry the last close with no change, and the next day would then be compared against it.
+    if is_nse_closed(now.date()):
+        logger.info("scheduled OI EOD snapshot: skipped, NSE holiday")
+        run.skip("NSE holiday")
+        return
 
     try:
         provider = get_provider("NSE")
@@ -323,10 +331,12 @@ def _record_oi_eod_snapshot() -> None:
         run.fail("0 NSE F&O stocks listed (instrument master not loaded?)")
         return
     logger.info("scheduled OI EOD snapshot: starting, %d symbols", len(symbols))
-    tally = {"written": 0, "unresolved": 0, "no_expiry": 0, "no_chain": 0, "failed": 0}
+    tally = {"written": 0, "unresolved": 0, "no_expiry": 0, "no_chain": 0, "unchanged": 0, "failed": 0}
     run.set_total(len(symbols))
 
     today = now.date()
+    if mc.coverage_through() < today:
+        logger.warning("scheduled OI EOD snapshot: the holiday list ran out on %s - closed days will not be skipped by the calendar", mc.coverage_through())
     db = SessionLocal()
     try:
         for i, symbol in enumerate(symbols):
@@ -362,6 +372,11 @@ def _record_oi_eod_snapshot() -> None:
                     if prev_row is not None
                     else None
                 )
+                # Nothing moved since the last snapshot: the market was shut (a holiday the calendar does not list), so the chain is
+                # just the last close again. A real trading day never leaves spot and both OI totals all identical.
+                if previous is not None and (spot_price, total_call_oi, total_put_oi) == (previous.spot_price, previous.total_call_oi, previous.total_put_oi):
+                    tally["unchanged"] += 1
+                    continue
                 result = compute_eod_buildup(total_call_oi, total_put_oi, spot_price, previous)
                 try:
                     activity = compute_eod_activity(chain, total_call_oi, total_put_oi, previous)

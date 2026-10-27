@@ -1616,6 +1616,9 @@ table.t th {
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--text, #e6e9ee);
+  /* A full read is ~30 lines; uncapped it pushed the chart down to a thin strip. Scroll inside instead. */
+  max-height: min(36vh, 320px);
+  overflow-y: auto;
 }
 .ai-read-head {
   display: flex;

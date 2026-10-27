@@ -102,6 +102,15 @@ def test_the_same_token_is_a_no_op(state):
     assert platform_dhan.refresh_from_accounts(NOW)["adopted"] is False and state.persisted == []
 
 
+def test_a_corrected_client_id_is_adopted_even_when_the_token_is_unchanged(state):
+    t = tok(10)
+    use(t)
+    settings.dhan_client_id = "wrong@example.com"
+    state.saved = saved(t, client_id="1101121515")
+    assert platform_dhan.refresh_from_accounts(NOW)["adopted"] is True
+    assert state.persisted == [("1101121515", t)] and dhan.current_access_token() == t
+
+
 def test_a_token_that_is_not_a_jwt_is_adopted_only_when_nothing_valid_is_in_use(state):
     state.saved = saved("opaque-token")
     assert platform_dhan.refresh_from_accounts(NOW)["adopted"] is True  # nothing in use: better than nothing

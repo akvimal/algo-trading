@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time as _time
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -75,8 +76,64 @@ def _next_working_day(d: date) -> date:
     return d
 
 
+_HOLIDAY_TTL_SECONDS = 60
+_holiday_cache: Optional[tuple[float, list[dict], Optional[date]]] = None
+
+
+def invalidate_holidays() -> None:
+    """Forget the cached holiday list, so an admin's edit shows at once."""
+    global _holiday_cache
+    _holiday_cache = None
+
+
+def _load_holidays() -> tuple[list[dict], Optional[date]]:
+    """The file's holidays with the admin-edited rows (market_data.market_holidays) laid over them, one entry per date (a database row
+    wins), plus the last date the list is known to cover. When the database cannot be read the file alone is used, so a database
+    problem never hides a holiday. Cached for a minute (see invalidate_holidays)."""
+    global _holiday_cache
+    now = _time.monotonic()
+    if _holiday_cache is not None and now - _holiday_cache[0] < _HOLIDAY_TTL_SECONDS:
+        return _holiday_cache[1], _holiday_cache[2]
+    by_date = {h["date"]: dict(h) for h in _static()["holidays"]}
+    covered = _d(_static()["valid_until"])
+    try:
+        from app.adapters.db.models import MarketHoliday
+        from app.adapters.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            for r in db.query(MarketHoliday).all():
+                by_date[r.holiday_date.isoformat()] = {"date": r.holiday_date.isoformat(), "name": r.name, "nse": r.nse, "mcx": r.mcx, "detail": r.detail}
+                # An admin who has entered a year's holidays has covered that whole year.
+                covered = max(covered, date(r.holiday_date.year, 12, 31))
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("calendar: could not read the admin-edited holidays, using the built-in list", exc_info=True)
+        fallback = sorted(by_date.values(), key=lambda h: h["date"])
+        _holiday_cache = (now, fallback, covered)  # cached too, so a down database is not retried on every call
+        return fallback, covered
+    holidays = sorted(by_date.values(), key=lambda h: h["date"])
+    _holiday_cache = (now, holidays, covered)
+    return holidays, covered
+
+
+def _holidays() -> list[dict]:
+    return _load_holidays()[0]
+
+
+def coverage_through() -> date:
+    """The last date the holiday list is known to cover: the file's valid_until, or the end of the latest year an admin has entered holidays for."""
+    return _load_holidays()[1]
+
+
 def _nse_closed_days() -> set[date]:
-    return {_d(h["date"]) for h in _static()["holidays"] if h["nse"] == "closed"}
+    return {_d(h["date"]) for h in _holidays() if h["nse"] == "closed"}
+
+
+def is_nse_closed(d: date) -> bool:
+    """True when NSE does not trade on `d`: a weekend or a listed full-day exchange holiday."""
+    return d.weekday() >= 5 or d in _nse_closed_days()
 
 
 def _previous_trading_day(d: date, closed: set[date]) -> date:
@@ -117,11 +174,13 @@ def _nse_expiries(start: date, end: date) -> list[CalendarEvent]:
 
 def _holiday_events(segment: str, start: date, end: date) -> list[CalendarEvent]:
     out = []
-    for h in _static()["holidays"]:
+    for h in _holidays():
         d = _d(h["date"])
         if not start <= d <= end:
             continue
         status = h["nse"] if segment == "NSE" else h["mcx"]
+        if status == "open":
+            continue
         if status == "special":
             out.append(CalendarEvent(date=d, title=f"{h['name']}: special trading session", kind="holiday", impact="medium", detail=h.get("detail")))
         elif segment == "NSE":
@@ -210,8 +269,8 @@ def upcoming(segment: str, today: Optional[date] = None, days: int = 7) -> Upcom
 
     if segment in ("NSE", "MCX"):
         events += _india_events(today, end) + _holiday_events(segment, today, end)
-        if end > _d(_static()["valid_until"]):
-            notes.append(f"India holidays and releases are only listed to {_d(_static()['valid_until']):%d %b %Y}.")
+        if end > coverage_through():
+            notes.append(f"India holidays and releases are only listed to {coverage_through():%d %b %Y}.")
     if segment == "NSE":
         events += _nse_expiries(today, end)
     elif segment == "MCX":

@@ -336,6 +336,13 @@ def run_ai_read(context: dict, api_key: str, model: Optional[str] = None) -> dic
         status = exc.response.status_code if exc.response is not None else "?"
         logger.warning("OpenRouter AI read failed (%s) for model %s: %s", status, model, exc)
         hint = {401: "key rejected", 402: "insufficient OpenRouter credit", 404: "model not found - pick another under More -> AI models"}.get(status, "")
+        if status == 400 and exc.response is not None:
+            # 400 = OpenRouter rejected the request itself (bad model id, or the model can't do strict json_schema);
+            # its body says which, so surface it rather than a bare status.
+            try:
+                hint = str(exc.response.json().get("error", {}).get("message", ""))[:160]
+            except Exception:
+                hint = exc.response.text[:160]
         raise RuntimeError(f"AI read failed: OpenRouter returned {status}" + (f" ({hint})" if hint else "")) from exc
     except Exception as exc:  # network, timeout, malformed JSON
         logger.warning("OpenRouter AI read failed for model %s: %s", model, exc)
